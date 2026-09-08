@@ -1,0 +1,94 @@
+services:
+  littlehorse:
+    container_name: lh-standalone
+    image: ghcr.io/littlehorse-enterprises/littlehorse/lh-standalone:latest
+    ports:
+      - "2023:2023"
+      - "8080:8080"
+      - "9092:9092"
+    restart: unless-stopped
+
+  apollo:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.apollo.app:app --host 0.0.0.0 --port 8001 --reload
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+    environment:
+      - APOLLO_API_KEY=${APOLLO_API_KEY:-}
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.agent.app:app --host 0.0.0.0 --port 8002 --reload
+    ports:
+      - "8002:8002"
+    volumes:
+      - .:/app
+    environment:
+      - AWS_BEDROCK_API_KEY=${AWS_BEDROCK_API_KEY:-}
+      - AWS_BEDROCK_REGION=${AWS_BEDROCK_REGION:-us-east-1}
+      - AWS_BEDROCK_MODEL_ID_HIGH=${AWS_BEDROCK_MODEL_ID_HIGH:-google.gemma-3-27b-it}
+      - AWS_BEDROCK_MODEL_ID_LOW=${AWS_BEDROCK_MODEL_ID_LOW:-google.gemma-3-4b-it}
+      - SKILLS_SERVICE_URL=http://skills:8003
+
+  skills:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.skills.app:app --host 0.0.0.0 --port 8003 --reload
+    ports:
+      - "8003:8003"
+    volumes:
+      - .:/app
+    environment:
+      - BAMBOOHR_API_KEY=${BAMBOOHR_API_KEY:-}
+      - BAMBOOHR_SUBDOMAIN=${BAMBOOHR_SUBDOMAIN:-}
+      - BAMBOOHR_SKILLS_FIELD=${BAMBOOHR_SKILLS_FIELD:-skills}
+      - BAMBOOHR_CACHE_TTL_SECONDS=${BAMBOOHR_CACHE_TTL_SECONDS:-300}
+      - BAMBOOHR_FETCH_DETAILS=${BAMBOOHR_FETCH_DETAILS:-true}
+
+  hubspot:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.hubspot.app:app --host 0.0.0.0 --port 8004 --reload
+    ports:
+      - "8004:8004"
+    volumes:
+      - .:/app
+    environment:
+      - HUBSPOT_SERVICE_KEY=${HUBSPOT_SERVICE_KEY:-}
+      - HUBSPOT_BASE_URL=${HUBSPOT_BASE_URL:-https://api.hubapi.com}
+
+  notify:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.notify.app:app --host 0.0.0.0 --port 8005 --reload
+    ports:
+      - "8005:8005"
+    volumes:
+      - .:/app
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+
+  jobs:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.jobs.app:app --host 0.0.0.0 --port 8006 --reload
+    ports:
+      - "8006:8006"
+    volumes:
+      - .:/app
+    environment:
+      - AWS_BEDROCK_API_KEY=${AWS_BEDROCK_API_KEY:-}
+      - AWS_BEDROCK_REGION=${AWS_BEDROCK_REGION:-us-east-1}
+      - AWS_BEDROCK_MODEL_ID_LOW=${AWS_BEDROCK_MODEL_ID_LOW:-google.gemma-3-4b-it}
+      - JOB_POSTING_SOURCES=${JOB_POSTING_SOURCES:-linkedin,company_website}
+      - LINKEDIN_JOBS_ACCESS_TOKEN=${LINKEDIN_JOBS_ACCESS_TOKEN:-}

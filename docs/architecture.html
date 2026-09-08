@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Leads Search Agent — Architecture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fafafa;
+      --fg: #1a1a1a;
+      --muted: #666;
+      --border: #ddd;
+      --card: #fff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111;
+        --fg: #eee;
+        --muted: #aaa;
+        --border: #333;
+        --card: #1a1a1a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      line-height: 1.5;
+      margin: 0;
+      padding: 2rem;
+      background: var(--bg);
+      color: var(--fg);
+      max-width: 1200px;
+      margin-inline: auto;
+    }
+    h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.25rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    p.lead { color: var(--muted); margin-top: 0; }
+    section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin: 1rem 0 2rem;
+      overflow-x: auto;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }
+    .note { font-size: 0.9rem; color: var(--muted); margin-top: 0.75rem; }
+    .mermaid { text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>Leads Search Agent — Architecture</h1>
+  <p class="lead">
+    <strong>Current implementation:</strong> parent + child WfSpecs, thin workers → HTTP microservices,
+    direct synchronous writes to HubSpot and Slack (no SQS). Open in a browser to render diagrams.
+  </p>
+
+  <h2>1. Combined workflow (parent + child)</h2>
+  <section>
+    <pre class="mermaid">
+flowchart TD
+  S1["search-companies"] --> S2["count-companies (local)"]
+  S2 --> C0{"count = 0?"}
+
+  C0 -->|"yes"| E1["build-empty-search-notification (local)"]
+  E1 --> N["notify → POST /v1/notify"]
+
+  C0 -->|"no"| S3["score-companies-icp"]
+  S3 --> S4["select-top-leads (local)"]
+  S4 --> S4b["fetch-ioet-skills-catalog (local)"]
+  S4b --> S5["spawn child per lead"]
+
+  S5 --> C1
+
+  subgraph child ["enrich-and-publish-lead (×N)"]
+    direction LR
+    C1["find-decision-makers"] --> C2["sanitize-public-fields"]
+    C2 --> C2b["extract-job-skills"]
+    C2b --> C3["match-ioet-skills"]
+    C3 --> C3b["draft-outreach-email"]
+    C3b --> C4["upsert-hubspot"]
+    C4 --> C5["complete(lead)"]
+  end
+
+  C5 --> S6["build-campaign-summary (local)"]
+  S6 --> N
+
+  N --> Done(["complete / Done"])
+    </pre>
+    <p class="note">
+      <code>(local)</code> tasks run in the worker process. Both branches converge on a single
+      <code>notify</code> task → Slack. <code>upsert-hubspot</code> writes to HubSpot directly;
+      <code>dry_run</code> skips HubSpot writes.
+    </p>
+  </section>
+
+  <h2>2. End-to-end WfSpec hierarchy (compact)</h2>
+  <section>
+    <pre class="mermaid">
+flowchart TB
+  subgraph parent["leads-search-workflow"]
+    P1["search-companies"]
+    P2["count-companies"]
+    P3{"count = 0?"}
+    P4["build-empty-search-notification"]
+    P5["notify → Slack"]
+    P6["score → select → fan-out"]
+    P7["build-campaign-summary"]
+    P1 --> P2 --> P3
+    P3 -->|yes| P4 --> P5
+    P3 -->|no| P6
+    P6 --> P7 --> P5
+  end
+
+  subgraph child["enrich-and-publish-lead (×N)"]
+    C1["find-decision-makers"]
+    C2["sanitize-public-fields"]
+    C3["match-ioet-skills"]
+    C3b["draft-outreach-email"]
+    C4["upsert-hubspot → HubSpot"]
+    C5["complete(lead)"]
+    C1 --> C2 --> C3 --> C3b --> C4 --> C5
+  end
+
+  P6 -->|"run_wf + wait_for_child_wf"| child
+    </pre>
+  </section>
+
+  <h2>3. AWS target deployment</h2>
+  <section>
+    <pre class="mermaid">
+flowchart TB
+  subgraph triggers["Triggers"]
+    LHCTL["lhctl CLI"]
+    Dashboard["LH Dashboard"]
+    Schedule["EventBridge → Scheduled WfRun"]
+  end
+
+  subgraph ec2["EC2 — long-running"]
+    LH["LH Server :2023"]
+    Workers["workers.py pollers"]
+  end
+
+  subgraph lambda["Lambda Function URLs"]
+    LamApollo["apollo"]
+    LamAgent["agent"]
+    LamSkills["skills"]
+    LamHub["hubspot"]
+    LamNotify["notify POST /v1/notify"]
+  end
+
+  subgraph externals["External APIs (sync writes)"]
+    ApolloAPI["Apollo.io"]
+    Bedrock["Bedrock"]
+    Bamboo["BambooHR"]
+    HS["HubSpot CRM"]
+    Slack["Slack"]
+  end
+
+  LHCTL --> LH
+  Workers --> LH
+  Workers --> LamApollo
+  Workers --> LamAgent
+  Workers --> LamSkills
+  Workers --> LamHub
+  Workers --> LamNotify
+  LamApollo --> ApolloAPI
+  LamAgent --> Bedrock
+  LamAgent --> LamSkills
+  LamSkills --> Bamboo
+  LamHub --> HS
+  LamNotify --> Slack
+    </pre>
+  </section>
+
+  <h2>4. Request flow</h2>
+  <section>
+    <pre class="mermaid">
+sequenceDiagram
+  participant T as Trigger
+  participant LH as LH Kernel
+  participant W as Worker
+  participant Svc as Microservice
+  participant Ext as External API
+
+  T->>LH: start leads-search-workflow
+  LH->>W: search-companies
+  W->>Svc: apollo
+  Svc->>Ext: Apollo.io
+  LH->>W: count-companies
+  alt count = 0
+    LH->>W: build-empty-search-notification
+    LH->>W: notify
+    W->>Svc: notify /v1/notify
+    Svc->>Ext: Slack
+  else count > 0
+    LH->>W: score → select
+    loop each company
+      LH->>LH: enrich-and-publish-lead
+      LH->>W: upsert-hubspot
+      W->>Svc: hubspot /v1/upsert-lead
+      Svc->>Ext: HubSpot CRM
+    end
+    LH->>W: build-campaign-summary → notify
+    W->>Svc: notify /v1/notify
+    Svc->>Ext: Slack
+  end
+    </pre>
+  </section>
+
+  <h2>5. Local development</h2>
+  <section>
+    <pre class="mermaid">
+flowchart LR
+  Reg["register.py"] --> LHL["LH :2023"]
+  Wrk["workers.py"] -->|"poll"| LHL
+  Wrk -->|"HTTP :8001–8005"| SVC["uvicorn services"]
+  Wrk -.-> Mocks["mocks/ optional"]
+    </pre>
+  </section>
+
+  <h2>6. Task → service mapping</h2>
+  <table>
+    <thead>
+      <tr><th>TaskDef</th><th>Service / runtime</th><th>Endpoint</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>search-companies</code></td><td>apollo</td><td><code>POST /v1/search-companies</code></td></tr>
+      <tr><td><code>score-companies-icp</code></td><td>agent</td><td><code>POST /v1/score-companies</code></td></tr>
+      <tr><td><code>find-decision-makers</code></td><td>apollo</td><td><code>POST /v1/find-decision-makers</code></td></tr>
+      <tr><td><code>sanitize-public-fields</code></td><td>hubspot</td><td><code>POST /v1/sanitize-public-fields</code></td></tr>
+      <tr><td><code>extract-job-skills</code></td><td>jobs → Bedrock</td><td><code>POST /v1/extract-job-skills</code></td></tr>
+      <tr><td><code>match-ioet-skills</code></td><td>agent</td><td><code>POST /v1/match-skills</code></td></tr>
+      <tr><td><code>draft-outreach-email</code></td><td>agent</td><td><code>POST /v1/draft-outreach-email</code></td></tr>
+      <tr><td><code>upsert-hubspot</code></td><td>hubspot → HubSpot API</td><td><code>POST /v1/upsert-lead</code></td></tr>
+      <tr><td><code>notify</code></td><td>notify → Slack</td><td><code>POST /v1/notify</code></td></tr>
+      <tr><td><code>notify-failure</code></td><td>notify → Slack</td><td><code>POST /v1/failure</code></td></tr>
+      <tr><td><code>count-companies</code></td><td>local worker</td><td>—</td></tr>
+      <tr><td><code>build-empty-search-notification</code></td><td>local worker</td><td>—</td></tr>
+      <tr><td><code>build-campaign-summary</code></td><td>local worker</td><td>—</td></tr>
+      <tr><td><code>fetch-ioet-skills-catalog</code></td><td>local worker → skills (once/campaign)</td><td>—</td></tr>
+      <tr><td><code>select-top-leads</code></td><td>local worker</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "neutral",
+      securityLevel: "loose",
+      flowchart: { curve: "basis", htmlLabels: true },
+    });
+  </script>
+</body>
+</html>

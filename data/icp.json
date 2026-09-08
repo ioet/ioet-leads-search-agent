@@ -1,0 +1,134 @@
+{
+  "version": "2026-08-26",
+  "source": "ioet_Current_ICP.pdf",
+  "prepared_by": "bdm@ioet.com",
+  "campaign": "Remote-Hiring Nearshore",
+  "segments": [
+    {
+      "id": "primary",
+      "priority": 1,
+      "in_outbound": true,
+      "definition": "AI/ML product & infrastructure companies, plus fintech. Majority of ioet real clients; current YC-batch sourcing focus.",
+      "industries": [
+        "ai_ml",
+        "ai_agentic_tooling",
+        "infrastructure",
+        "data",
+        "fintech",
+        "payments",
+        "lending",
+        "insurance",
+        "banking"
+      ],
+      "employee_count": { "min": 10, "max": 500 },
+      "funding_stages": [
+        "pre_seed",
+        "seed",
+        "series_a",
+        "series_b",
+        "series_c"
+      ],
+      "geos": ["US", "CA"],
+      "sourcing": {
+        "yc_batches": [
+          "Fall 2025",
+          "Winter 2026",
+          "Spring 2026",
+          "Summer 2026"
+        ],
+        "yc_preferred": true
+      }
+    },
+    {
+      "id": "secondary",
+      "priority": 2,
+      "in_outbound": true,
+      "definition": "Ecommerce/DTC and consumer-brand tech companies scaling their engineering function.",
+      "industries": ["ecommerce", "dtc", "consumer_brand_tech"],
+      "employee_count": { "min": 10, "max": 500 },
+      "funding_stages": [
+        "pre_seed",
+        "seed",
+        "series_a",
+        "series_b",
+        "series_c"
+      ],
+      "geos": ["US", "CA"]
+    },
+    {
+      "id": "testing",
+      "priority": 3,
+      "in_outbound": true,
+      "volume": "low",
+      "definition": "GovTech and security/networking companies. Same profile; low volume until proven.",
+      "industries": ["govtech", "security", "networking"],
+      "employee_count": { "min": 10, "max": 500 },
+      "funding_stages": [
+        "pre_seed",
+        "seed",
+        "series_a",
+        "series_b",
+        "series_c"
+      ],
+      "geos": ["US", "CA"]
+    },
+    {
+      "id": "excluded_enterprise",
+      "in_outbound": false,
+      "definition": "Large enterprises and IT services/systems integrators. Real relationships exist but need partnership development, not cold outreach.",
+      "examples": ["EY", "HPE", "Tech Mahindra"],
+      "reason": "Partnership motion, not cold outbound; tracked separately"
+    }
+  ],
+  "buyer_personas": [
+    {
+      "tier": 1,
+      "titles": [
+        "Founder",
+        "Co-Founder",
+        "CEO",
+        "CTO",
+        "Chief Product & Tech Officer"
+      ],
+      "company_size_hint": { "max_employees": 150 },
+      "messaging": "exec_roi"
+    },
+    {
+      "tier": 2,
+      "titles": ["VP Engineering", "Head of Engineering"],
+      "company_size_hint": { "min_employees": 150 },
+      "messaging": "exec_roi",
+      "reach_with": [1]
+    },
+    {
+      "tier": 3,
+      "titles": ["Engineering Manager"],
+      "company_size_hint": { "min_employees": 150 },
+      "messaging": "team_capacity",
+      "secondary_contact": true
+    }
+  ],
+  "prioritization_signals": [
+    "recent_raise",
+    "live_job_posting",
+    "stated_hiring_need"
+  ],
+  "systems": {
+    "company_search": "apollo",
+    "contact_enrichment": "apollo",
+    "crm": "hubspot",
+    "skills": "bamboohr",
+    "llm": "bedrock"
+  },
+  "data_policy": {
+    "hubspot_allowlist": [
+      "name",
+      "domain",
+      "industry",
+      "linkedin_url",
+      "title",
+      "skill_match_note"
+    ],
+    "hubspot_denylist": ["email", "phone"]
+  }
+}

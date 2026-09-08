@@ -1,0 +1,28 @@
+flowchart TD
+  S1["search-companies"] --> S2["count-companies (local)"]
+  S2 --> C0{"count = 0?"}
+
+  C0 -->|"yes"| E1["build-empty-search-notification (local)"]
+  E1 --> N["notify → POST /v1/notify"]
+
+  C0 -->|"no"| S3["score-companies-icp"]
+  S3 --> S4["select-top-leads (local)"]
+  S4 --> S4b["fetch-ioet-skills-catalog (local)"]
+  S4b --> S5["spawn child per lead"]
+
+  S5 --> C1
+
+  subgraph child ["enrich-and-publish-lead (×N)"]
+    direction LR
+    C1["find-decision-makers"] --> C2["sanitize-public-fields"]
+    C2 --> C2b["extract-job-skills"]
+    C2b --> C3["match-ioet-skills"]
+    C3 --> C3b["draft-outreach-email"]
+    C3b --> C4["upsert-hubspot"]
+    C4 --> C5["complete(lead)"]
+  end
+
+  C5 --> S6["build-campaign-summary (local)"]
+  S6 --> N
+
+  N --> Done(["complete / Done"])

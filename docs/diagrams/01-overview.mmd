@@ -1,0 +1,48 @@
+flowchart TB
+  subgraph triggers["Triggers"]
+    LHCTL["lhctl / Dashboard"]
+    Cron["Scheduled WfRun (planned)"]
+  end
+
+  subgraph lh["LittleHorse :2023"]
+    Parent["leads-search-workflow"]
+    Child["enrich-and-publish-lead"]
+    Parent -->|"run_wf per company"| Child
+  end
+
+  subgraph workflow["workflow/"]
+    Workers["workers.py pollers"]
+    Local["local: count, build-message, select"]
+  end
+
+  subgraph services["services/ :8001–8005"]
+    Apollo["apollo"]
+    Agent["agent"]
+    Skills["skills"]
+    HubSpot["hubspot"]
+    Notify["notify POST /v1/notify"]
+  end
+
+  subgraph externals["External APIs (sync)"]
+    ApolloAPI["Apollo.io"]
+    Bedrock["AWS Bedrock"]
+    Bamboo["BambooHR"]
+    HS["HubSpot CRM"]
+    Slack["Slack"]
+  end
+
+  LHCTL --> Parent
+  Cron --> Parent
+  Workers --> lh
+  Workers --> Local
+  Workers --> Apollo
+  Workers --> Agent
+  Workers --> Skills
+  Workers --> HubSpot
+  Workers --> Notify
+  Apollo --> ApolloAPI
+  Agent --> Bedrock
+  Agent --> Skills
+  Skills --> Bamboo
+  HubSpot --> HS
+  Notify --> Slack

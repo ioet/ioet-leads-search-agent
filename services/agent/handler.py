@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, ValidationError
+
+from services.agent.bedrock import BedrockConfigError, BedrockResponseError
+from services.agent.logic import (
+    draft_outreach_email,
+    load_icp_for_version,
+    match_ioet_skills,
+    score_companies,
+)
+from services.agent.skills_source import SkillsCatalogError
+from services.common.schemas import Company, LeadResult
+
+router = APIRouter(prefix="/v1", tags=["agent"])
+
+
+class ScoreCompaniesRequest(BaseModel):
+    icp_version: str
+    companies: list[Company] = Field(default_factory=list)
+    model_id: str | None = None
+
+
+class MatchSkillsRequest(BaseModel):
+    lead: LeadResult
+    skills_catalog: list[dict[str, Any]] | None = None
+    model_id: str | None = None
+
+
+class DraftOutreachEmailRequest(BaseModel):
+    lead: LeadResult
+    model_id: str | None = None
+
+
+def _parse_draft_outreach_body(body: dict[str, Any]) -> tuple[LeadResult, str | None]:
+    """Accept either ``{lead, model_id?}`` or a bare ``LeadResult`` payload."""
+    model_id = body.get("model_id")
+    if not isinstance(model_id, str):
+        model_id = None
+    if isinstance(body.get("lead"), dict):
+        return LeadResult.model_validate(body["lead"]), model_id
+    return LeadResult.model_validate(body), model_id
+
+
+@router.post("/score-companies")
+def score_companies_endpoint(request: ScoreCompaniesRequest) -> list[Company]:
+    """Rank companies against ICP soft signals via AWS Bedrock."""
+    try:
+        icp = load_icp_for_version(request.icp_version)
+        return score_companies(icp, request.companies, model_id=request.model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BedrockConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except BedrockResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/match-skills")
+def match_skills_endpoint(request: MatchSkillsRequest) -> LeadResult:
+    """Match lead to ioet skills via Bedrock + preloaded skills catalog."""
+    try:
+        return match_ioet_skills(
+            request.lead, catalog=request.skills_catalog, model_id=request.model_id
+        )
+    except SkillsCatalogError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except BedrockConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except BedrockResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/draft-outreach-email")
+def draft_outreach_email_endpoint(body: dict[str, Any]) -> LeadResult:
+    """Draft a customer-centric outreach email and attach it to the lead notes.
+
+    Accepts either ``{"lead": {...}, "model_id": "..."}`` or a bare lead object.
+    """
+    try:
+        lead, model_id = _parse_draft_outreach_body(body)
+        email = draft_outreach_email(lead, model_id=model_id)
+        return lead.model_copy(update={"notes": email})
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except BedrockConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except BedrockResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/draft-crm-note")
+def draft_crm_note_endpoint(body: dict[str, Any]) -> dict[str, str]:
+    """Deprecated alias — returns outreach email as {note}. Prefer /v1/draft-outreach-email."""
+    try:
+        lead, model_id = _parse_draft_outreach_body(body)
+        email = draft_outreach_email(lead, model_id=model_id)
+        return {"note": email}
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except BedrockConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except BedrockResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

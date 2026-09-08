@@ -1,0 +1,4 @@
+aws_region       = "us-east-1"
+project_name     = "leads-search-agent"
+environment      = "dev"
+bedrock_model_id = "google.gemma-3-27b-it"
