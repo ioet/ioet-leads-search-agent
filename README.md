@@ -6,9 +6,9 @@ LittleHorse-orchestrated pipeline that discovers companies via Apollo, scores th
 
 ```
 workflow/          WfSpecs, TaskDefs, thin LH workers (HTTP bridge)
-services/          Microservices (agent, apollo, skills, hubspot, notify)
-services/common/   Shared schemas, ICP model, HTTP helpers
-infrastructure/    Terraform (AWS)
+services/          Microservices (agent, apollo, skills, hubspot, notify, jobs)
+services/common/   Shared schemas, ICP model, HTTP helpers, secrets bootstrap
+scripts/           Build/push images, refresh Lambda/ECS, register LH
 data/icp.json      Canonical ICP configuration
 ```
 
@@ -17,6 +17,12 @@ data/icp.json      Canonical ICP configuration
 - Python **3.13** (required by `littlehorse-client`; 3.14 is not supported yet)
 - Docker (LittleHorse kernel + optional full stack)
 - `lhctl` CLI ([install guide](https://littlehorse.io/docs/server/developer-guide/install))
+
+## AWS deploy
+
+Infrastructure lives in **infra-terraform** (`ioet-primary/ioet-leads-search`). This repo’s GitHub Actions workflow builds/pushes `:latest` images, refreshes Lambdas/ECS, uploads `data/icp.json` when it changes, and re-registers LittleHorse specs when `workflow/` changes.
+
+See [docs/deploy.md](docs/deploy.md).
 
 ## Local setup
 

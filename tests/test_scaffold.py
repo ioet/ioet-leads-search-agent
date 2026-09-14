@@ -6,7 +6,9 @@ from services.common.schemas import Company, LeadResult, WorkflowRunInput
 from tests.helpers import assert_model
 
 
-def test_workflow_run_input_defaults() -> None:
+def test_workflow_run_input_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("MAX_COMPANIES", raising=False)
+    monkeypatch.delenv("MAX_CONTACTS_PER_COMPANY", raising=False)
     inp = WorkflowRunInput(icp_version="2026-08-26", campaign_id="test-campaign")
     assert inp.segment_ids == ["primary"]
     assert isinstance(inp.segment_ids, list)

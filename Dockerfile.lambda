@@ -1,0 +1,17 @@
+# Shared Lambda image for all FastAPI microservices (Mangum).
+# One image; each Lambda overrides CMD to the service handler.
+#
+#   docker build -f Dockerfile.lambda -t leads-search-services .
+#   # apollo example:
+#   # CMD override: services.apollo.lambda_handler.handler
+
+FROM public.ecr.aws/lambda/python:3.13
+
+COPY requirements.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir -r requirements.txt "mangum>=0.19,<1" -t ${LAMBDA_TASK_ROOT}
+
+COPY services ${LAMBDA_TASK_ROOT}/services
+COPY data ${LAMBDA_TASK_ROOT}/data
+
+# Default; Terraform image_config.command overrides per function.
+CMD ["services.apollo.lambda_handler.handler"]

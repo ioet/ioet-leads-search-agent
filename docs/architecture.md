@@ -1,6 +1,6 @@
 # Leads Search Agent — Architecture
 
-**Current implementation:** two WfSpecs (parent + child), thin workers → HTTP microservices, **direct synchronous** calls to HubSpot and Slack (no SQS queue). Target AWS layout uses EC2 + Lambda; local dev uses docker-compose + uvicorn.
+**Current implementation:** two WfSpecs (parent + child), thin workers → HTTP microservices, **direct synchronous** calls to HubSpot and Slack (no SQS queue). Target AWS layout uses **LittleHorse Cloud** + ECS workers + Lambda Function URLs; local dev uses docker-compose + uvicorn.
 
 > **How to view the graphs:** Cursor’s markdown editor shows Mermaid as source code.
 > - **Browser:** open [`docs/architecture.html`](architecture.html)
@@ -16,32 +16,29 @@
 flowchart TB
   subgraph triggers["Triggers"]
     LHCTL["lhctl CLI"]
-    Dashboard["LH Dashboard"]
+    Dashboard["LH Cloud Dashboard"]
     Schedule["EventBridge → Scheduled WfRun"]
   end
 
-  subgraph ec2["EC2 — long-running servers"]
-    subgraph lh_box["LittleHorse Kernel"]
-      LH["LH Server :2023"]
-      LHDash["Dashboard :8080"]
-    end
-    subgraph worker_box["Task Workers"]
+  subgraph aws_compute["AWS compute"]
+    subgraph worker_box["ECS Fargate"]
       Workers["workflow/workers.py<br/>LHTaskWorker pollers"]
     end
+    subgraph lambda["Lambda — Function URLs"]
+      LamApollo["apollo-service"]
+      LamAgent["agent-service"]
+      LamSkills["skills-service"]
+      LamHub["hubspot-service"]
+      LamNotify["notify-service"]
+      LamJobs["jobs-service"]
+    end
   end
 
-  subgraph lambda["Lambda — Function URLs (stateless)"]
-    LamApollo["apollo-service"]
-    LamAgent["agent-service"]
-    LamSkills["skills-service"]
-    LamHub["hubspot-service"]
-    LamNotify["notify-service<br/>POST /v1/notify"]
-  end
-
-  subgraph aws["AWS managed services"]
+  subgraph managed["Managed / SaaS"]
+    LHCloud["LittleHorse Cloud"]
     SM["Secrets Manager"]
     CW["CloudWatch Logs"]
-    S3["S3 — icp.json"]
+    S3["S3 — icp.json + skills catalogs"]
     Bedrock["Bedrock Converse API"]
   end
 
@@ -52,33 +49,32 @@ flowchart TB
     Slack["Slack"]
   end
 
-  LHCTL --> LH
-  Dashboard --> LHDash
-  Schedule --> LH
+  LHCTL --> LHCloud
+  Dashboard --> LHCloud
+  Schedule --> LHCloud
 
-  Workers -->|"gRPC poll / execute tasks"| LH
+  Workers -->|"gRPC poll / execute tasks"| LHCloud
   Workers -->|"HTTPS POST"| LamApollo
   Workers -->|"HTTPS POST"| LamAgent
   Workers -->|"HTTPS POST"| LamSkills
   Workers -->|"HTTPS POST"| LamHub
   Workers -->|"HTTPS POST"| LamNotify
+  Workers -->|"HTTPS POST"| LamJobs
+  Workers -->|"catalog-ref → S3"| S3
 
   LamApollo --> ApolloAPI
   LamAgent --> Bedrock
-  LamAgent -->|"GET /v1/catalog"| LamSkills
   LamSkills --> Bamboo
   LamHub --> HS
   LamNotify --> Slack
-
-  note["Writes today: hubspot + notify call<br/>external APIs directly (sync)"]
-  LamHub -.-> note
-  LamNotify -.-> note
+  LamJobs --> Bedrock
 
   LamApollo --> SM
   LamAgent --> SM
   LamSkills --> SM
   LamHub --> SM
   LamNotify --> SM
+  LamJobs --> SM
   LamAgent --> S3
   Workers --> CW
   lambda --> CW
@@ -88,15 +84,16 @@ flowchart TB
 
 | Component | Runtime | Why |
 |-----------|---------|-----|
-| **LittleHorse Kernel** | EC2 (always on) | Durable workflow state, WfRun orchestration, dashboard |
-| **Task workers** (`workers.py`) | EC2 or ECS Fargate | Long-polling gRPC to LH — not suitable for Lambda |
+| **LittleHorse Kernel** | LittleHorse Cloud | Durable workflow state, WfRun orchestration, dashboard |
+| **Task workers** (`workers.py`) | ECS Fargate | Long-polling gRPC to LH — not suitable for Lambda |
 | **Integration services** (`services/*`) | Lambda + Function URL | Stateless HTTP; scale per invocation; no idle cost |
 | **ICP config** | S3 (+ git) | Versioned object loaded at runtime |
-| **API keys** | Secrets Manager | Apollo, HubSpot, BambooHR, Slack, Bedrock, LH creds |
-| **LLM inference** | Bedrock (managed) | Agent calls Converse API via Bearer `AWS_BEDROCK_API_KEY` |
-| **WfSpec registration** | CI / one-off (`register.py`) | Run on deploy or from operator via lhctl |
+| **Skills catalog (per campaign)** | S3 | Large Bamboo snapshot; LH only stores `catalog-ref` |
+| **API keys / LH OAuth** | Secrets Manager | Apollo, HubSpot, BambooHR, Slack, Bedrock, LH Cloud |
+| **LLM inference** | Bedrock (managed) | Agent/jobs call Converse via Bearer `AWS_BEDROCK_API_KEY` |
+| **WfSpec registration** | CI / one-off (`register.py`) | Against LH Cloud |
 
-ECS Fargate is an equivalent alternative to EC2 for task workers. Terraform in `infrastructure/` will provision both patterns.
+Terraform for AWS lives in **infra-terraform** (`ioet-primary/ioet-leads-search`). This app repo ships container images, refreshes Lambda/ECS, uploads `icp.json`, and registers WfSpecs — see [deploy.md](./deploy.md).
 
 ---
 
@@ -338,19 +335,22 @@ flowchart LR
 ```
 leads-search-agent/
 ├── workflow/
-│   ├── register.py          → CI / operator (registers WfSpecs to LH EC2)
-│   ├── workers.py           → EC2 / ECS Fargate (long-lived pollers)
+│   ├── register.py          → CI / operator (registers WfSpecs to LH Cloud)
+│   ├── workers.py           → ECS Fargate (long-lived pollers)
 │   └── workflows/           → compiled into LH kernel via register.py
 ├── services/
 │   ├── apollo/              → Lambda Function URL
-│   ├── agent/               → Lambda Function URL (+ Bedrock IAM)
+│   ├── agent/               → Lambda Function URL (+ Bedrock)
 │   ├── skills/              → Lambda Function URL
 │   ├── hubspot/             → Lambda Function URL
-│   └── notify/              → Lambda Function URL
-├── infrastructure/          → Terraform (pending)
-├── data/icp.json            → S3 object (+ git source of truth)
+│   ├── notify/              → Lambda Function URL
+│   └── jobs/                → Lambda Function URL
+├── scripts/                 → build/push, refresh runtime, register LH
+├── data/icp.json            → uploaded to S3 by CI when changed
 └── docker-compose.yml       → local dev only
 ```
+
+AWS Terraform: `infra-terraform/ioet-primary/ioet-leads-search`.
 
 ---
 
@@ -359,4 +359,4 @@ leads-search-agent/
 - [Architecture plan](./leads_agent_architecture.plan.md) — design rationale and phases
 - [outbound-queue-design.md](./outbound-queue-design.md) — **deferred** SQS outbound pattern
 - [README](../README.md) — local setup and run commands
-- [infrastructure/README.md](../infrastructure/README.md) — Terraform placeholders
+- [deploy.md](./deploy.md) — app-repo CI deploy (images, ICP, LH register)

@@ -49,3 +49,14 @@ def clear_cache() -> dict[str, str]:
     """Drop the in-memory catalog cache (ops / tests)."""
     clear_catalog_cache()
     return {"status": "cleared"}
+
+
+@router.get("/debug/bamboo-fields")
+def debug_bamboo_fields() -> dict:
+    """Ops helper: show configured skills field vs Bamboo meta/fields (no secrets)."""
+    try:
+        return _client().probe_skills_field()
+    except BambooHRConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Bamboo probe failed: {exc}") from exc

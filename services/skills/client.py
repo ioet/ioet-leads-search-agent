@@ -94,6 +94,93 @@ class BambooHRClient:
             return {}
         return response.json()
 
+    def list_skill_related_fields(self) -> list[dict[str, Any]]:
+        """Return Bamboo meta/fields entries whose name/alias looks skill-related."""
+        raw = self._get("/meta/fields")
+        fields = raw if isinstance(raw, list) else []
+        out: list[dict[str, Any]] = []
+        for item in fields:
+            if not isinstance(item, dict):
+                continue
+            blob = f"{item.get('name', '')} {item.get('alias', '')} {item.get('id', '')}".lower()
+            if any(token in blob for token in ("skill", "competenc", "expertise", "tech stack", "technology")):
+                out.append(
+                    {
+                        "id": item.get("id"),
+                        "name": item.get("name"),
+                        "alias": item.get("alias"),
+                        "type": item.get("type"),
+                    }
+                )
+        return out
+
+    def probe_skills_field(self, employee_id: str | None = None) -> dict[str, Any]:
+        """One-employee probe for the configured skills field (ops / debugging)."""
+        directory = self._get("/employees/directory")
+        employees = directory.get("employees") or []
+        if not employees:
+            return {"error": "directory empty"}
+        emp = next((e for e in employees if employee_id and str(e.get("id")) == str(employee_id)), employees[0])
+        emp_id = str(emp.get("id"))
+        detail = self._employee_detail(emp_id)
+        related = self.list_skill_related_fields()
+
+        raw_meta = self._get("/meta/fields")
+        meta_fields = raw_meta if isinstance(raw_meta, list) else []
+        # Help ops find the real alias when it isn't named "*skill*".
+        interesting: list[dict[str, Any]] = []
+        for item in meta_fields:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            alias = str(item.get("alias") or "")
+            ftype = str(item.get("type") or "").lower()
+            blob = f"{name} {alias}".lower()
+            if ftype in {"list", "multilist", "checkbox", "textarea", "text"} or any(
+                token in blob
+                for token in (
+                    "skill",
+                    "tech",
+                    "stack",
+                    "tool",
+                    "compet",
+                    "language",
+                    "framework",
+                    "expertise",
+                    "capability",
+                    "tag",
+                )
+            ):
+                interesting.append(
+                    {
+                        "id": item.get("id"),
+                        "name": item.get("name"),
+                        "alias": item.get("alias"),
+                        "type": item.get("type"),
+                    }
+                )
+
+        return {
+            "employee_id": emp_id,
+            "display_name": emp.get("displayName"),
+            "configured_skills_field": self.skills_field,
+            "directory_has_configured_field": self.skills_field in emp,
+            "directory_skills_raw": emp.get(self.skills_field),
+            "detail_keys": sorted(detail.keys()) if detail else [],
+            "detail_skills_raw": detail.get(self.skills_field) if detail else None,
+            "detail_empty": not bool(detail),
+            "parsed_skills": _parse_skills(detail.get(self.skills_field) if detail else emp.get(self.skills_field)),
+            "skill_related_meta_fields": related,
+            "meta_field_count": len(meta_fields),
+            "candidate_meta_fields": interesting[:80],
+            "hint": (
+                "Directory never includes custom fields; skills come from GET /employees/{id}"
+                " using BAMBOOHR_SKILLS_FIELD (must be the Bamboo field alias from meta/fields)."
+                " detail_keys==['id'] usually means the requested field alias is invalid or not"
+                " permitted for this API key."
+            ),
+        }
+
     def fetch_catalog(self, *, use_cache: bool = True) -> list[dict[str, Any]]:
         if use_cache:
             cached = _CACHE.get()
@@ -107,6 +194,14 @@ class BambooHRClient:
             "true",
             "yes",
         }
+        if employees and self.skills_field not in (employees[0] or {}):
+            logger.info(
+                "Bamboo directory has no %r field (normal for custom fields); "
+                "will use per-employee detail when BAMBOOHR_FETCH_DETAILS is enabled",
+                self.skills_field,
+            )
+
+        detail_failures = 0
         normalized: list[dict[str, Any]] = []
         for emp in employees:
             emp_id = str(emp.get("id") or "").strip()
@@ -117,6 +212,8 @@ class BambooHRClient:
             # Prefer directory row; only hit per-employee endpoint when skills missing.
             if fetch_details and not skills:
                 detail = self._employee_detail(emp_id)
+                if not detail:
+                    detail_failures += 1
                 skills = _parse_skills(detail.get(self.skills_field))
             display_name = (
                 emp.get("displayName")
@@ -134,6 +231,23 @@ class BambooHRClient:
                     "department": _optional_str(emp.get("department") or detail.get("department")),
                     "skills": skills,
                 }
+            )
+
+        with_skills = sum(1 for row in normalized if row.get("skills"))
+        if normalized and with_skills == 0:
+            related = []
+            try:
+                related = self.list_skill_related_fields()
+            except Exception:
+                logger.exception("Could not list Bamboo meta fields while diagnosing empty skills")
+            aliases = [str(f.get("alias") or f.get("id") or "") for f in related if f.get("alias") or f.get("id")]
+            logger.warning(
+                "Bamboo catalog has 0/%d employees with skills (field=%r, detail_failures=%d). "
+                "Check BAMBOOHR_SKILLS_FIELD — skill-related meta aliases: %s",
+                len(normalized),
+                self.skills_field,
+                detail_failures,
+                aliases[:20] or "(none found)",
             )
 
         _CACHE.set(normalized, self.cache_ttl_seconds)
@@ -157,9 +271,26 @@ class BambooHRClient:
         fields = f"jobTitle,department,{self.skills_field}"
         try:
             data = self._get(f"/employees/{employee_id}", params={"fields": fields, "onlyCurrent": "true"})
+            if isinstance(data, dict) and self.skills_field not in data:
+                logger.debug(
+                    "Bamboo employee %s detail missing field %r (keys=%s)",
+                    employee_id,
+                    self.skills_field,
+                    sorted(data.keys()),
+                )
             return data if isinstance(data, dict) else {}
-        except requests.HTTPError:
-            logger.warning("BambooHR employee detail failed for %s; using directory row only", employee_id)
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", "?")
+            body = ""
+            if getattr(exc, "response", None) is not None:
+                body = (exc.response.text or "")[:200]
+            logger.warning(
+                "BambooHR employee detail failed for %s (field=%r status=%s): %s",
+                employee_id,
+                self.skills_field,
+                status,
+                body or exc,
+            )
             return {}
 
 

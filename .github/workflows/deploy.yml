@@ -1,0 +1,188 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "services/**"
+      - "workflow/**"
+      - "data/icp.json"
+      - "Dockerfile.lambda"
+      - "Dockerfile.workers"
+      - "requirements*.txt"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "services/**"
+      - "workflow/**"
+      - "data/icp.json"
+      - "Dockerfile.lambda"
+      - "Dockerfile.workers"
+      - "requirements*.txt"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      upload_icp:
+        description: Upload data/icp.json to S3
+        required: true
+        default: false
+        type: boolean
+      register_lh:
+        description: Re-register LittleHorse TaskDefs/WfSpecs
+        required: true
+        default: true
+        type: boolean
+      deploy_images:
+        description: Build/push images and refresh Lambda + ECS
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  PROJECT_NAME: leads-search-agent
+  ENVIRONMENT: prod
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      icp: ${{ steps.filter.outputs.icp }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'services/**'
+              - 'Dockerfile.lambda'
+              - 'Dockerfile.workers'
+              - 'requirements*.txt'
+              - '.github/workflows/deploy.yml'
+            icp:
+              - 'data/icp.json'
+            workflow:
+              - 'workflow/**'
+              - 'requirements*.txt'
+
+  deploy:
+    name: Build and refresh
+    needs: changes
+    if: >
+      github.event_name != 'pull_request' &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.deploy_images) ||
+        (github.event_name == 'push' && (needs.changes.outputs.app == 'true' || needs.changes.outputs.workflow == 'true'))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push images
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/build_and_push.sh
+          SERVICES_REPO="${ECR_REGISTRY}/${PROJECT_NAME}-${ENVIRONMENT}-services" \
+          WORKERS_REPO="${ECR_REGISTRY}/${PROJECT_NAME}-${ENVIRONMENT}-workers" \
+            ./scripts/build_and_push.sh latest
+
+      - name: Refresh Lambdas and ECS
+        run: |
+          set -euo pipefail
+          chmod +x scripts/refresh_runtime.sh
+          ./scripts/refresh_runtime.sh latest
+
+  upload-icp:
+    name: Upload ICP
+    needs: changes
+    if: >
+      github.event_name != 'pull_request' &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.upload_icp) ||
+        (github.event_name == 'push' && needs.changes.outputs.icp == 'true')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-icp-${{ github.run_id }}
+
+      - name: Upload data/icp.json
+        env:
+          ICP_BUCKET: ${{ vars.ICP_BUCKET }}
+          ICP_S3_KEY: ${{ vars.ICP_S3_KEY || 'icp/icp.json' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ICP_BUCKET}" ]; then
+            echo "::error::Set Actions variable ICP_BUCKET (terraform output -raw icp_bucket from infra-terraform)"
+            exit 1
+          fi
+          aws s3 cp data/icp.json "s3://${ICP_BUCKET}/${ICP_S3_KEY}"
+
+  register-lh:
+    name: Register LittleHorse specs
+    needs: [changes, deploy]
+    if: >
+      always() &&
+      github.event_name != 'pull_request' &&
+      (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.register_lh) ||
+        (github.event_name == 'push' && needs.changes.outputs.workflow == 'true' && needs.deploy.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-register-lh-${{ github.run_id }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Register TaskDefs and WfSpecs
+        env:
+          LHC_API_PORT: ${{ vars.LITTLEHORSE_PORT || '2023' }}
+          LHC_API_PROTOCOL: TLS
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/register_lh.sh
+          ./scripts/register_lh.sh

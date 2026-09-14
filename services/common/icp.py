@@ -6,7 +6,9 @@ Canonical data lives in ``data/icp.json`` (transcribed from ioet_Current_ICP.pdf
 from __future__ import annotations
 
 import json
+import os
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -103,9 +105,28 @@ class IdealCustomerProfile(BaseModel):
 
 
 def load_icp(path: Path | str | None = None) -> IdealCustomerProfile:
-    """Load and validate the canonical ICP JSON file."""
-    icp_path = Path(path) if path is not None else DEFAULT_ICP_PATH
-    raw = json.loads(icp_path.read_text(encoding="utf-8"))
+    """Load and validate the canonical ICP JSON (local file or S3)."""
+    if path is not None:
+        icp_path = Path(path)
+        raw = json.loads(icp_path.read_text(encoding="utf-8"))
+        return IdealCustomerProfile.model_validate(raw)
+
+    bucket = os.environ.get("ICP_S3_BUCKET", "").strip()
+    key = os.environ.get("ICP_S3_KEY", "").strip()
+    if bucket and key:
+        return _load_icp_from_s3(bucket, key)
+
+    raw = json.loads(DEFAULT_ICP_PATH.read_text(encoding="utf-8"))
+    return IdealCustomerProfile.model_validate(raw)
+
+
+@lru_cache(maxsize=4)
+def _load_icp_from_s3(bucket: str, key: str) -> IdealCustomerProfile:
+    import boto3
+
+    client = boto3.client("s3")
+    obj = client.get_object(Bucket=bucket, Key=key)
+    raw = json.loads(obj["Body"].read().decode("utf-8"))
     return IdealCustomerProfile.model_validate(raw)
 
 
