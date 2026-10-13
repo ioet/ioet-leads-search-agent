@@ -8,26 +8,24 @@ from services.common.icp import DataPolicy, IdealCustomerProfile, load_icp
 from services.common.schemas import Company, Contact, LeadResult, SkillMatch
 
 # Fields we never persist to HubSpot even if somehow present on models.
-_SENSITIVE_KEYS = frozenset(
-    {
-        "email",
-        "emails",
-        "phone",
-        "phones",
-        "mobile",
-        "mobile_phone",
-        "personal_email",
-        "work_email",
-        "ssn",
-        "salary",
-        "compensation",
-    }
-)
+# Contact email and phone are kept when a source provides them.
+_SENSITIVE_KEYS = frozenset({"ssn", "salary", "compensation"})
 
 _COMPANY_PUBLIC = frozenset(
-    {"name", "domain", "industry", "linkedin_url", "employee_count", "segment_id"}
+    {
+        "name",
+        "domain",
+        "industry",
+        "linkedin_url",
+        "employee_count",
+        "segment_id",
+        "notes",
+        "apollo_organization_id",
+    }
 )
-_CONTACT_PUBLIC = frozenset({"full_name", "title", "linkedin_url", "persona_tier"})
+_CONTACT_PUBLIC = frozenset(
+    {"full_name", "title", "linkedin_url", "email", "phone", "persona_tier", "notes"}
+)
 
 
 def _strip_sensitive(payload: dict[str, Any]) -> dict[str, Any]:
@@ -72,6 +70,8 @@ def hubspot_payload_from_lead(
         if key in allow and key not in deny and value is not None:
             company_props[key] = value
 
+    include_notes = "skill_match_note" in allow and "skill_match_note" not in deny
+
     contact_props: list[dict[str, Any]] = []
     for contact in contacts:
         props: dict[str, Any] = {}
@@ -79,21 +79,25 @@ def hubspot_payload_from_lead(
             "name": contact.full_name,
             "title": contact.title,
             "linkedin_url": contact.linkedin_url,
+            "email": contact.email,
+            "phone": contact.phone,
         }
         for key, value in cmap.items():
             if key in allow and key not in deny and value is not None:
                 props[key] = value
+        if include_notes and contact.notes and contact.notes.strip():
+            props["note"] = contact.notes.strip()
         if props:
             contact_props.append(props)
 
-    note: str | None = None
-    if "skill_match_note" in allow and "skill_match_note" not in deny:
-        note = format_lead_note(lead)
+    company_note: str | None = None
+    if include_notes:
+        company_note = format_company_note(lead)
 
     return {
         "company": company_props,
         "contacts": contact_props,
-        "note": note,
+        "company_note": company_note,
     }
 
 
@@ -124,8 +128,8 @@ def _format_skill_note(matches: list[SkillMatch], extra: str | None) -> str | No
     return "\n\n".join(parts) if parts else None
 
 
-def format_lead_note(lead: LeadResult) -> str | None:
-    """HubSpot note body — the drafted outreach email when present."""
-    if lead.notes and lead.notes.strip():
-        return lead.notes.strip()
+def format_company_note(lead: LeadResult) -> str | None:
+    """HubSpot company note — links to job postings found for this company."""
+    if lead.company.notes and lead.company.notes.strip():
+        return lead.company.notes.strip()
     return None

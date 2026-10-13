@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LOCAL_DIR = ".cache/skills-catalogs"
 DEFAULT_S3_PREFIX = "skills-catalogs"
+# Last successfully fetched catalog; used when BambooHR is slow or unavailable.
+LATEST_CATALOG_REF = "latest"
 
 
 class CatalogStore(Protocol):
@@ -156,12 +158,26 @@ def load_skills_catalog(catalog_ref: str) -> list[dict[str, Any]] | None:
     return get_catalog_store().load(catalog_ref)
 
 
-def require_skills_catalog(catalog_ref: str) -> list[dict[str, Any]]:
-    """Load catalog from durable storage or raise if the campaign snapshot is missing."""
-    catalog = load_skills_catalog(catalog_ref)
-    if catalog is None:
-        raise CatalogNotFoundError(
-            f"Skills catalog not found in durable store for ref={catalog_ref!r}. "
-            "Run fetch-ioet-skills-catalog in the parent workflow before matching."
+def require_skills_catalog(catalog_ref: str | None) -> list[dict[str, Any]]:
+    """Load the campaign catalog, falling back to the last good snapshot.
+
+    ``catalog_ref`` is empty when the parent's fetch-ioet-skills-catalog step failed.
+    """
+    ref = (catalog_ref or "").strip()
+    if ref:
+        catalog = load_skills_catalog(ref)
+        if catalog is not None:
+            return catalog
+    latest = load_skills_catalog(LATEST_CATALOG_REF)
+    if latest is not None:
+        logger.warning(
+            "Skills catalog ref=%r unavailable; using last good snapshot (%d employees)",
+            ref,
+            len(latest),
         )
-    return catalog
+        return latest
+    raise CatalogNotFoundError(
+        f"Skills catalog not found in durable store for ref={ref!r} and no "
+        f"{LATEST_CATALOG_REF!r} snapshot exists. fetch-ioet-skills-catalog must "
+        "succeed at least once before matching."
+    )

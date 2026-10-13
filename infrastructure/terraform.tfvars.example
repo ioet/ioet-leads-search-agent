@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and fill in AWS credentials.
+# Resource names, VPC, backend, and tags match infra-terraform/ioet-primary/ioet-leads-search.
+
+aws_access_key_id     = "AKIA..."
+aws_secret_access_key = "..."
+# aws_session_token   = ""  # only if using temporary / SSO credentials

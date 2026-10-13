@@ -11,7 +11,7 @@ from workflow.workflows.enrich_publish import CHILD_WF_NAME
 
 PARENT_WF_NAME = "leads-search-workflow"
 
-TASK_TIMEOUT_SECONDS = int(os.environ.get("TASK_TIMEOUT_SECONDS", "120"))
+TASK_TIMEOUT_SECONDS = int(os.environ.get("TASK_TIMEOUT_SECONDS", "161"))
 TASK_RETRIES = int(os.environ.get("TASK_RETRIES", "3"))
 
 
@@ -82,7 +82,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         companies.assign(search_out)
-        wf.handle_error(search_out, _on_error_notify_and_continue("search-companies"))
+        wf.handle_any_failure(search_out, _on_error_notify_and_continue("search-companies"))
 
         count_out = wf.execute(
             "count-companies",
@@ -106,7 +106,7 @@ def get_workflow() -> Workflow:
                 timeout_seconds=TASK_TIMEOUT_SECONDS,
                 retries=TASK_RETRIES,
             )
-            thread.handle_error(notify_out, _on_error_notify_and_continue("notify"))
+            thread.handle_any_failure(notify_out, _on_error_notify_and_continue("notify"))
             thread.complete()
 
         def _continue_after_search(thread: WorkflowThread) -> None:
@@ -119,7 +119,7 @@ def get_workflow() -> Workflow:
                 exponential_backoff=_retry_policy(),
             )
             companies.assign(score_out)
-            thread.handle_error(
+            thread.handle_any_failure(
                 score_out, _on_error_notify_and_continue("score-companies-icp")
             )
 
@@ -131,7 +131,7 @@ def get_workflow() -> Workflow:
                 retries=TASK_RETRIES,
             )
             selected.assign(select_out)
-            thread.handle_error(
+            thread.handle_any_failure(
                 select_out, _on_error_notify_and_continue("select-top-leads")
             )
 
@@ -141,7 +141,7 @@ def get_workflow() -> Workflow:
                 retries=TASK_RETRIES,
             )
             catalog_ref.assign(catalog_out)
-            thread.handle_error(
+            thread.handle_any_failure(
                 catalog_out, _on_error_notify_and_continue("fetch-ioet-skills-catalog")
             )
 
@@ -166,7 +166,7 @@ def get_workflow() -> Workflow:
                 timeout_seconds=TASK_TIMEOUT_SECONDS,
             )
             notification.assign(summary_out)
-            thread.handle_error(
+            thread.handle_any_failure(
                 summary_out, _on_error_notify_and_continue("build-campaign-summary")
             )
 
@@ -176,7 +176,7 @@ def get_workflow() -> Workflow:
                 timeout_seconds=TASK_TIMEOUT_SECONDS,
                 retries=TASK_RETRIES,
             )
-            thread.handle_error(notify_out, _on_error_notify_and_continue("notify"))
+            thread.handle_any_failure(notify_out, _on_error_notify_and_continue("notify"))
 
         wf.do_if(
             search_count.is_equal_to(0),

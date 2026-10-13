@@ -75,8 +75,8 @@ def upsert_lead(request: UpsertLeadRequest) -> LeadResult:
             "company": company_ref,
         }
 
-    note_body = payload.get("note")
-    if note_body:
+    company_note = payload.get("company_note")
+    if company_note:
         note_id = f"{prefix}-note-{uuid.uuid4().hex[:8]}"
         ids["note"] = note_id
         CRM_STORE["notes"].append(
@@ -84,7 +84,24 @@ def upsert_lead(request: UpsertLeadRequest) -> LeadResult:
                 "id": note_id,
                 "company_id": company_id,
                 "company": company_ref,
-                "body": note_body,
+                "body": company_note,
+                "dry_run": request.dry_run,
+            }
+        )
+
+    for idx, contact in enumerate(payload.get("contacts") or []):
+        contact_note = contact.get("note")
+        contact_id = ids.get(f"contact_{idx}")
+        if not contact_note or not contact_id:
+            continue
+        note_id = f"{prefix}-contact-note-{uuid.uuid4().hex[:8]}"
+        ids[f"contact_note_{idx}"] = note_id
+        CRM_STORE["notes"].append(
+            {
+                "id": note_id,
+                "contact_id": contact_id,
+                "company": company_ref,
+                "body": contact_note,
                 "dry_run": request.dry_run,
             }
         )

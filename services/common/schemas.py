@@ -44,13 +44,18 @@ class Company(BaseModel):
     icp_score: float | None = None
     rationale: str | None = None
     signals: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    apollo_organization_id: str | None = None
 
 
 class Contact(BaseModel):
     full_name: str
     title: str | None = None
     linkedin_url: str | None = None
+    email: str | None = None
+    phone: str | None = None
     persona_tier: int | None = None
+    notes: str | None = None
 
 
 class SkillMatch(BaseModel):

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 from html import unescape
-from typing import Any
 
 import requests
 
@@ -24,6 +23,25 @@ CAREERS_PATHS = (
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>[\s\S]*?</\1>", re.IGNORECASE)
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_JS_HINTS = (
+    "function(",
+    "function (",
+    "!function",
+    "window.",
+    "document.",
+    "=>{",
+    "=> {",
+    "googletagmanager",
+    "rebamboodomains",
+    "jquery",
+    "webpackjsonp",
+)
+_JUNK_TITLE_RE = re.compile(
+    r"[{}=;]|function\s*\(|=>|!window|</|<!--|^\s*(?:var|const|let|if)\b",
+    re.IGNORECASE,
+)
 
 
 class CompanyWebsiteJobPostingSource(JobPostingSource):
@@ -56,7 +74,7 @@ class CompanyWebsiteJobPostingSource(JobPostingSource):
                 continue
 
             text = _html_to_text(response.text)
-            if len(text) < 200:
+            if len(text) < 200 or _looks_like_code(text):
                 continue
 
             extracted = self._extract_postings(text, company, url, max_results=max_results)
@@ -77,8 +95,12 @@ class CompanyWebsiteJobPostingSource(JobPostingSource):
         """Heuristic split of careers page text into posting-sized chunks."""
         chunks = _split_job_sections(page_text)
         postings: list[JobPosting] = []
-        for idx, chunk in enumerate(chunks[:max_results]):
+        for chunk in chunks:
+            if _looks_like_code(chunk):
+                continue
             title = _guess_title(chunk) or f"Open role at {company.name}"
+            if _is_junk_title(title):
+                continue
             postings.append(
                 JobPosting(
                     title=title,
@@ -87,21 +109,39 @@ class CompanyWebsiteJobPostingSource(JobPostingSource):
                     url=page_url,
                 )
             )
-        if not postings and len(page_text) >= 200:
-            postings.append(
-                JobPosting(
-                    title=f"Careers — {company.name}",
-                    source=self.source_id,
-                    description=page_text[:8000],
-                    url=page_url,
+            if len(postings) >= max_results:
+                break
+        if not postings and len(page_text) >= 200 and not _looks_like_code(page_text):
+            fallback_title = f"Careers — {company.name}"
+            if not _is_junk_title(fallback_title):
+                postings.append(
+                    JobPosting(
+                        title=fallback_title,
+                        source=self.source_id,
+                        description=page_text[:8000],
+                        url=page_url,
+                    )
                 )
-            )
         return postings
 
 
 def _html_to_text(html: str) -> str:
-    text = unescape(_TAG_RE.sub(" ", html))
+    cleaned = _SCRIPT_STYLE_RE.sub(" ", html)
+    cleaned = _COMMENT_RE.sub(" ", cleaned)
+    text = unescape(_TAG_RE.sub(" ", cleaned))
     return _WS_RE.sub(" ", text).strip()
+
+
+def _looks_like_code(text: str) -> bool:
+    sample = text[:6000].lower()
+    hits = sum(1 for hint in _JS_HINTS if hint in sample)
+    if hits >= 2:
+        return True
+    return hits >= 1 and sample.count(";") >= 8
+
+
+def _is_junk_title(title: str) -> bool:
+    return bool(_JUNK_TITLE_RE.search(title.strip()))
 
 
 def _split_job_sections(text: str) -> list[str]:

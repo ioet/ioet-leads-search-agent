@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=aws_from_tfvars.sh
+source "$ROOT/scripts/aws_from_tfvars.sh"
 
 TAG="${1:-latest}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
@@ -20,13 +22,25 @@ WORKERS_REPO="${WORKERS_REPO:-${REGISTRY}/${PROJECT_NAME}-${ENVIRONMENT}-workers
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "${REGISTRY}"
 
-echo "Building services Lambda image → ${SERVICES_REPO}:${TAG}"
-docker build -f Dockerfile.lambda -t "${SERVICES_REPO}:${TAG}" .
-docker push "${SERVICES_REPO}:${TAG}"
+echo "Building services Lambda image → ${SERVICES_REPO}:${TAG} (linux/amd64, Docker media types)"
+# Lambda rejects BuildKit provenance/SBOM indexes and OCI image lists (common on
+# Apple Silicon). Push a single-platform Docker-schema image instead.
+docker buildx build \
+  --platform linux/amd64 \
+  --provenance=false \
+  --sbom=false \
+  --output=type=image,push=true,oci-mediatypes=false \
+  -t "${SERVICES_REPO}:${TAG}" \
+  -f Dockerfile.lambda .
 
-echo "Building workers image → ${WORKERS_REPO}:${TAG}"
-docker build -f Dockerfile.workers -t "${WORKERS_REPO}:${TAG}" .
-docker push "${WORKERS_REPO}:${TAG}"
+echo "Building workers image → ${WORKERS_REPO}:${TAG} (linux/amd64)"
+docker buildx build \
+  --platform linux/amd64 \
+  --provenance=false \
+  --sbom=false \
+  --output=type=image,push=true,oci-mediatypes=false \
+  -t "${WORKERS_REPO}:${TAG}" \
+  -f Dockerfile.workers .
 
 echo "Done. Refresh Lambdas / ECS (CI does this automatically), e.g.:"
 echo "  aws lambda update-function-code --function-name ${PROJECT_NAME}-${ENVIRONMENT}-apollo --image-uri ${SERVICES_REPO}:${TAG}"

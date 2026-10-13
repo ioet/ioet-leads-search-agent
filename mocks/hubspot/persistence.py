@@ -61,10 +61,19 @@ def persist_upsert(
     lead_path = base / "leads" / f"{slug}.json"
     lead_path.write_text(json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8")
 
-    note_body = payload.get("note")
+    note_body = payload.get("company_note")
     if note_body:
         note_path = base / "leads" / f"{slug}-note.txt"
         note_path.write_text(str(note_body).strip() + "\n", encoding="utf-8")
+
+    contact_notes = [
+        str(contact.get("note")).strip()
+        for contact in (payload.get("contacts") or [])
+        if isinstance(contact, dict) and contact.get("note")
+    ]
+    if contact_notes:
+        contact_note_path = base / "leads" / f"{slug}-contact-note.txt"
+        contact_note_path.write_text("\n\n".join(contact_notes) + "\n", encoding="utf-8")
 
     history_path = base / "leads" / "history" / f"{upserted_at.replace(':', '-')}_{slug}.json"
     history_path.parent.mkdir(parents=True, exist_ok=True)

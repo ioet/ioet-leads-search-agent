@@ -11,6 +11,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=aws_from_tfvars.sh
+source "$ROOT/scripts/aws_from_tfvars.sh"
+
 PROJECT_NAME="${PROJECT_NAME:-leads-search-agent}"
 ENVIRONMENT="${ENVIRONMENT:-prod}"
 SECRET_ID="${SECRET_ID:-${PROJECT_NAME}-${ENVIRONMENT}/app}"

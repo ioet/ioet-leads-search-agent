@@ -17,6 +17,12 @@ from services.common.schemas import Company, Contact
 logger = logging.getLogger(__name__)
 
 APOLLO_BASE_URL = os.environ.get("APOLLO_BASE_URL", "https://api.apollo.io/api/v1").rstrip("/")
+_BULK_MATCH_LIMIT = 10
+
+
+def enrich_contacts_enabled() -> bool:
+    """People search omits email/phone and masks last names; enrichment costs 1 credit/person."""
+    return os.environ.get("APOLLO_ENRICH_CONTACTS", "true").strip().lower() in {"1", "true", "yes"}
 
 
 class ApolloConfigError(RuntimeError):
@@ -82,28 +88,61 @@ class ApolloClient:
     ) -> list[Contact]:
         if not titles:
             return []
-        payload: dict[str, Any] = {
+        base: dict[str, Any] = {
             "page": 1,
             "per_page": min(max_results, 100),
             "person_titles": titles,
             "include_similar_titles": True,
         }
+        scopes: list[dict[str, Any]] = []
+        if company.apollo_organization_id:
+            scopes.append({"organization_ids": [company.apollo_organization_id]})
         if company.domain:
-            payload["q_organization_domains_list"] = [company.domain]
-        else:
+            scopes.append({"q_organization_domains_list": [company.domain]})
+        if not scopes:
             # api_search has no organization-name filter; keyword is the closest fallback.
-            payload["q_keywords"] = company.name
+            scopes.append({"q_keywords": company.name})
 
-        data = self._post("/mixed_people/api_search", payload)
-        people = data.get("people") or []
+        people: list[dict[str, Any]] = []
+        for scope in scopes:
+            data = self._post("/mixed_people/api_search", {**base, **scope})
+            people = [p for p in data.get("people") or [] if isinstance(p, dict) and _person_name(p)]
+            if people:
+                break
+        people = people[:max_results]
+
+        if people and enrich_contacts_enabled():
+            people = self._enrich_people(people)
+
         contacts: list[Contact] = []
         for raw in people:
             contact = _person_to_contact(raw, titles)
             if contact is not None:
                 contacts.append(contact)
-            if len(contacts) >= max_results:
-                break
         return contacts
+
+    def _enrich_people(self, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Merge people/bulk_match results (full name, LinkedIn, work email) into search rows."""
+        ids = [str(p["id"]) for p in people if p.get("id")]
+        matches: dict[str, dict[str, Any]] = {}
+        for start in range(0, len(ids), _BULK_MATCH_LIMIT):
+            chunk = ids[start : start + _BULK_MATCH_LIMIT]
+            try:
+                data = self._post("/people/bulk_match", {"details": [{"id": i} for i in chunk]})
+            except requests.HTTPError as exc:
+                logger.warning("Apollo bulk_match failed; keeping search-only contacts: %s", exc)
+                return people
+            for match in data.get("matches") or []:
+                if isinstance(match, dict) and match.get("id"):
+                    matches[str(match["id"])] = match
+
+        enriched: list[dict[str, Any]] = []
+        for raw in people:
+            match = matches.get(str(raw.get("id")))
+            if match:
+                raw = {**raw, **{k: v for k, v in match.items() if v not in (None, "", [])}}
+            enriched.append(raw)
+        return enriched
 
 
 def search_companies(
@@ -157,6 +196,8 @@ def _org_to_company(raw: dict[str, Any], segment_id: str) -> Company:
     elif isinstance(industries, str):
         industry = industries
 
+    # Saved "accounts" carry the org under organization_id; plain organizations use id.
+    org_id = raw.get("organization_id") or raw.get("id")
     company = Company(
         name=str(raw.get("name") or raw.get("organization_name") or "Unknown"),
         domain=_normalize_domain(raw.get("primary_domain") or raw.get("website_url") or raw.get("domain")),
@@ -164,26 +205,72 @@ def _org_to_company(raw: dict[str, Any], segment_id: str) -> Company:
         linkedin_url=linkedin,
         employee_count=_as_int(raw.get("estimated_num_employees") or raw.get("employee_count")),
         segment_id=segment_id,
+        apollo_organization_id=str(org_id) if org_id else None,
     )
     return sanitize_company(company)
 
 
-def _person_to_contact(raw: dict[str, Any], titles: list[str]) -> Contact | None:
+def _person_name(raw: dict[str, Any]) -> str:
     first = (raw.get("first_name") or "").strip()
     last = (raw.get("last_name") or "").strip()
-    full_name = f"{first} {last}".strip() or str(raw.get("name") or "").strip()
+    return f"{first} {last}".strip() or str(raw.get("name") or "").strip()
+
+
+def _person_to_contact(raw: dict[str, Any], titles: list[str]) -> Contact | None:
+    full_name = _person_name(raw)
     if not full_name:
         return None
     title = raw.get("title") or raw.get("headline")
     linkedin = raw.get("linkedin_url")
-    # Drop any email/phone Apollo may include — never surface them.
     contact = Contact(
         full_name=full_name,
         title=str(title) if title else None,
         linkedin_url=str(linkedin) if linkedin else None,
+        email=_person_email(raw),
+        phone=_person_phone(raw),
         persona_tier=_guess_persona_tier(str(title) if title else None, titles),
     )
     return sanitize_contact(contact)
+
+
+def _usable_email(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    email = value.strip()
+    # Apollo returns placeholders like email_not_unlocked@domain.com for locked emails.
+    if "@" not in email or "not_unlocked" in email.lower():
+        return None
+    return email
+
+
+def _person_email(raw: dict[str, Any]) -> str | None:
+    email = _usable_email(raw.get("email"))
+    if email:
+        return email
+    emails = raw.get("emails") or raw.get("contact_emails") or raw.get("personal_emails")
+    if isinstance(emails, list):
+        for item in emails:
+            value = (item.get("email") or item.get("address")) if isinstance(item, dict) else item
+            email = _usable_email(value)
+            if email:
+                return email
+    return None
+
+
+def _person_phone(raw: dict[str, Any]) -> str | None:
+    phone = raw.get("phone") or raw.get("sanitized_phone")
+    if isinstance(phone, str) and phone.strip():
+        return phone.strip()
+    numbers = raw.get("phone_numbers") or raw.get("phones")
+    if isinstance(numbers, list):
+        for item in numbers:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+            if isinstance(item, dict):
+                value = item.get("sanitized_number") or item.get("raw_number") or item.get("number")
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return None
 
 
 def _guess_persona_tier(title: str | None, requested_titles: list[str]) -> int | None:

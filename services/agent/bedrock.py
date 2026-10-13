@@ -13,6 +13,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
+_JSON_FENCE_OPEN_RE = re.compile(r"```(?:json)?\s*", re.IGNORECASE)
 
 Complexity = Literal["high", "low"]
 
@@ -169,19 +170,80 @@ def extract_text(response_body: dict[str, Any]) -> str:
 
 
 def parse_json_from_text(text: str) -> Any:
-    """Extract JSON from raw model text (plain JSON or fenced code block)."""
+    """Extract JSON from raw model text (plain JSON, fenced, or truncated)."""
     stripped = text.strip()
     match = _JSON_BLOCK_RE.search(stripped)
-    candidate = match.group(1).strip() if match else stripped
+    if match:
+        candidate = match.group(1).strip()
+    else:
+        fence = _JSON_FENCE_OPEN_RE.search(stripped)
+        if fence:
+            candidate = stripped[fence.end() :].strip()
+            if candidate.endswith("```"):
+                candidate = candidate[:-3].strip()
+        else:
+            candidate = stripped
+    parsed = _loads_json_lenient(candidate)
+    if parsed is not None:
+        return parsed
+    raise BedrockResponseError(f"Could not parse JSON from model output: {text[:500]!r}")
+
+
+def _loads_json_lenient(candidate: str) -> Any | None:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
-        for opener, closer in (("{", "}"), ("[", "]")):
-            start = candidate.find(opener)
-            end = candidate.rfind(closer)
-            if start != -1 and end > start:
-                try:
-                    return json.loads(candidate[start : end + 1])
-                except json.JSONDecodeError:
-                    continue
-        raise BedrockResponseError(f"Could not parse JSON from model output: {text[:500]!r}")
+        pass
+    for opener in ("{", "["):
+        start = candidate.find(opener)
+        if start == -1:
+            continue
+        snippet = candidate[start:]
+        try:
+            return json.loads(snippet)
+        except json.JSONDecodeError:
+            repaired = _repair_truncated_json(snippet)
+            if repaired is not None:
+                logger.warning("Repaired truncated JSON from model output")
+                return repaired
+    return None
+
+
+def _repair_truncated_json(text: str) -> Any | None:
+    """Close open strings/brackets when the model hits max tokens mid-JSON."""
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack and stack[-1] == ch:
+            stack.pop()
+    repaired = text.rstrip()
+    if in_string:
+        repaired += '"'
+    repaired = repaired.rstrip().rstrip(",")
+    closing = "".join(reversed(stack))
+    try:
+        return json.loads(repaired + closing)
+    except json.JSONDecodeError:
+        pass
+    # Truncated mid-key: `"confidence` became `"co"` with no value.
+    if repaired.endswith('"'):
+        try:
+            return json.loads(repaired + ":null" + closing)
+        except json.JSONDecodeError:
+            return None
+    return None

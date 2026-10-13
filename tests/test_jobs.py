@@ -71,8 +71,7 @@ def test_extract_job_skills_no_postings() -> None:
     assert validated.job_context.required_skills == []
     assert validated.job_context.note is not None
     assert "No job postings found" in validated.job_context.note
-    assert validated.notes is not None
-    assert "No job postings found" in validated.notes
+    assert validated.company.notes is None
 
 
 def test_extract_job_skills_with_postings() -> None:
@@ -95,6 +94,9 @@ def test_extract_job_skills_with_postings() -> None:
     assert validated.job_context.postings[0].title == "Platform Engineer"
     assert validated.job_context.required_skills == ["Terraform", "Kubernetes", "AWS"]
     assert validated.job_context.sources_searched == ["_test_with_jobs"]
+    assert validated.company.notes is not None
+    assert "https://acme.com/careers" in validated.company.notes
+    assert "Platform Engineer" in validated.company.notes
 
 
 def test_discover_job_postings_aggregates_sources() -> None:
@@ -120,3 +122,55 @@ def test_jobs_endpoint_returns_typed_lead(monkeypatch) -> None:
     validated = assert_json_response(response.json(), LeadResult)
     assert validated.job_context is not None
     assert "No job postings found" in (validated.job_context.note or "")
+
+
+def test_company_website_drops_script_and_js_junk() -> None:
+    from services.jobs.sources.company_website import CompanyWebsiteJobPostingSource
+
+    html = """
+    <html><head>
+    <script>window.dataLayer=window.dataLayer||[]; function gtag(){}
+    var reBambooDomains = ['bamboohr.com'];
+    (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':1});})(window,document);
+    </script>
+    <style>body { font-family: Lato, Vollkorn; }</style>
+    </head><body><!-- if (!window --></body></html>
+    """
+    session = MagicMock()
+    response = MagicMock()
+    response.ok = True
+    response.text = html
+    session.get.return_value = response
+
+    source = CompanyWebsiteJobPostingSource(session=session)
+    postings = source.search(Company(name="Grey", domain="grey.co"))
+    assert postings == []
+
+
+def test_company_website_keeps_real_job_copy() -> None:
+    from services.jobs.sources.company_website import CompanyWebsiteJobPostingSource
+
+    html = """
+    <html><body>
+    <h1>Careers at Acme</h1>
+    <p>Software Engineer. Build Python APIs with AWS and Kubernetes on a collaborative
+    platform team serving enterprise customers. You will own services end to end and
+    mentor other engineers while shipping reliable production systems every week.</p>
+    </body></html>
+    """
+    session = MagicMock()
+
+    def fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.ok = url.rstrip("/").endswith("://acme.com/careers")
+        resp.text = html
+        return resp
+
+    session.get.side_effect = fake_get
+
+    source = CompanyWebsiteJobPostingSource(session=session)
+    postings = source.search(Company(name="Acme", domain="acme.com"))
+    assert len(postings) == 1
+    assert postings[0].source == "company_website"
+    assert "Python" in postings[0].description
+    assert "function(" not in postings[0].title

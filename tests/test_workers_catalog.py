@@ -18,7 +18,11 @@ def test_fetch_ioet_skills_catalog_persists_only() -> None:
         }
     ]
     ctx = MagicMock()
-    ctx.wf_run_id = "parent-wf-123"
+
+    class _WfRunId:
+        id = "parent-wf-123"
+
+    ctx.wf_run_id = _WfRunId()
 
     with (
         patch("workflow.workers.fetch_skills_catalog", return_value=catalog),
@@ -27,7 +31,48 @@ def test_fetch_ioet_skills_catalog_persists_only() -> None:
         ref = asyncio.run(fetch_ioet_skills_catalog_task(ctx))
 
     assert ref == "parent-wf-123"
-    save_mock.assert_called_once_with("parent-wf-123", catalog)
+    saved = [call.args for call in save_mock.call_args_list]
+    assert ("parent-wf-123", catalog) in saved
+    assert ("latest", catalog) in saved
+
+
+def test_fetch_ioet_skills_catalog_falls_back_to_latest_on_timeout(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SKILLS_CATALOG_LOCAL_DIR", str(tmp_path))
+    monkeypatch.delenv("SKILLS_CATALOG_S3_BUCKET", raising=False)
+    monkeypatch.delenv("SKILLS_CATALOG_STORAGE", raising=False)
+    from services.common.catalog_store import load_skills_catalog, save_skills_catalog
+
+    previous = [{"employee_id": "7", "display_name": "Linus", "skills": ["Go"]}]
+    save_skills_catalog("latest", previous)
+
+    ctx = MagicMock()
+
+    class _WfRunId:
+        id = "parent-wf-timeout"
+
+    ctx.wf_run_id = _WfRunId()
+
+    with patch("workflow.workers.fetch_skills_catalog", side_effect=TimeoutError("read timed out")):
+        ref = asyncio.run(fetch_ioet_skills_catalog_task(ctx))
+
+    assert ref == "parent-wf-timeout"
+    assert load_skills_catalog("parent-wf-timeout") == previous
+
+
+def test_fetch_ioet_skills_catalog_raises_without_snapshot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SKILLS_CATALOG_LOCAL_DIR", str(tmp_path))
+    monkeypatch.delenv("SKILLS_CATALOG_S3_BUCKET", raising=False)
+    monkeypatch.delenv("SKILLS_CATALOG_STORAGE", raising=False)
+    ctx = MagicMock()
+
+    class _WfRunId:
+        id = "parent-wf-none"
+
+    ctx.wf_run_id = _WfRunId()
+
+    with patch("workflow.workers.fetch_skills_catalog", side_effect=TimeoutError("read timed out")):
+        with pytest.raises(Exception, match="read timed out"):
+            asyncio.run(fetch_ioet_skills_catalog_task(ctx))
 
 
 def test_match_ioet_skills_loads_from_durable_store() -> None:

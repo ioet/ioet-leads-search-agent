@@ -1,4 +1,4 @@
-"""Prompt templates for agent-service Bedrock calls."""
+"""Prompt templates for every Bedrock call in the project."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from services.common.icp import IdealCustomerProfile
-from services.common.schemas import Company, LeadResult
+from services.common.schemas import Company, JobPosting, LeadResult
 
 
 def score_companies_system(icp: IdealCustomerProfile) -> str:
@@ -80,6 +80,7 @@ def match_skills_user(lead: LeadResult, catalog: list[dict[str, Any]]) -> str:
             "skills": row.get("skills") or [],
         }
         for row in catalog
+        if row.get("skills")
     ]
     required_skills: list[str] = []
     job_note: str | None = None
@@ -100,8 +101,17 @@ def match_skills_user(lead: LeadResult, catalog: list[dict[str, Any]]) -> str:
             "Return an empty skill_matches array — do not infer skills from industry alone."
         )
 
+    lead_dump = lead.model_dump(exclude_none=True)
+    job_context = lead_dump.get("job_context")
+    if isinstance(job_context, dict):
+        lead_dump["job_context"] = {
+            "required_skills": job_context.get("required_skills") or [],
+            "note": job_context.get("note"),
+            "sources_searched": job_context.get("sources_searched") or [],
+        }
+
     payload = {
-        "lead": lead.model_dump(exclude_none=True),
+        "lead": lead_dump,
         "required_skills": required_skills,
         "job_posting_note": job_note,
         "skills_catalog": slim_catalog,
@@ -123,14 +133,24 @@ def draft_outreach_email_system() -> str:
     return (
         "You draft customer-centric outbound emails for ioet, a nearshore engineering partner. "
         "Write to the primary contact about their hiring needs and how ioet can staff those openings. "
+        "Address the recipient by name. The body must open with a greeting that uses greeting_name "
+        "(for example, 'Hi Ada,'). Never use a generic greeting such as 'Hello there' or 'Hi there'. "
         "Focus on the customer's goals — not internal staffing logistics. "
-        "No email addresses, phone numbers, or other sensitive PII. "
+        "Do not include email addresses, phone numbers, or other sensitive PII in the email body. "
         "Professional, warm B2B tone. Return ONLY valid JSON."
     )
 
 
+def _greeting_name(full_name: str | None) -> str | None:
+    if not full_name or not full_name.strip():
+        return None
+    return full_name.strip().split()[0]
+
+
 def draft_outreach_email_user(lead: LeadResult) -> str:
-    primary_contact = lead.contacts[0].model_dump(exclude_none=True) if lead.contacts else None
+    primary = lead.contacts[0] if lead.contacts else None
+    primary_contact = primary.model_dump(exclude_none=True) if primary else None
+    greeting_name = _greeting_name(primary.full_name if primary else None)
     job_postings = []
     required_skills: list[str] = []
     job_note: str | None = None
@@ -142,6 +162,7 @@ def draft_outreach_email_user(lead: LeadResult) -> str:
     payload = {
         "lead": lead.model_dump(exclude_none=True),
         "primary_contact": primary_contact,
+        "greeting_name": greeting_name,
         "job_postings": job_postings,
         "required_skills": required_skills,
         "job_posting_note": job_note,
@@ -155,6 +176,8 @@ def draft_outreach_email_user(lead: LeadResult) -> str:
         ],
         "instructions": (
             "Draft a short outreach email to the primary contact. "
+            "The body must start with a greeting that uses greeting_name, such as 'Hi Ada,'. "
+            "Do not write 'Hello there', 'Hi there', or any greeting that omits the contact's name. "
             "Open with their context (role, company, hiring needs from job postings when available). "
             "Explain how ioet can help cover their open roles with nearshore engineers who match "
             "the required skills — mention specific ioet people/teams from ioet_skill_matches when present. "
@@ -177,3 +200,55 @@ def draft_crm_note_system() -> str:
 
 def draft_crm_note_user(lead: LeadResult) -> str:
     return draft_outreach_email_user(lead)
+
+
+def extract_required_skills_system() -> str:
+    return (
+        "You extract technical and professional skills explicitly required in job descriptions. "
+        "Return ONLY valid JSON — no markdown."
+    )
+
+
+def extract_required_skills_user(postings: list[JobPosting]) -> str:
+    payload = {
+        "postings": [p.model_dump(exclude_none=True) for p in postings],
+        "instructions": (
+            "From the job descriptions, list distinct skills, tools, languages, and frameworks "
+            "the employer requires or strongly prefers. Use concise canonical names "
+            "(e.g. Python, React, AWS, Kubernetes). Omit soft skills unless explicitly required. "
+            "Deduplicate case-insensitively."
+        ),
+        "output_schema": {"required_skills": ["string"]},
+    }
+    return json.dumps(payload, indent=2)
+
+
+def extract_icp_system() -> str:
+    return (
+        "You transcribe an Ideal Customer Profile PDF into a single JSON object. "
+        "Return ONLY valid JSON — no markdown, no commentary. "
+        "Use the provided JSON schema exactly (field names, enums, nested objects). "
+        "If a field is not in the PDF, copy a sensible value from the current ICP hint "
+        "or omit optional fields. Keep industry tags, geos, and funding_stages as short "
+        "snake_case / ISO codes matching the schema examples."
+    )
+
+
+def extract_icp_user(
+    pdf_text: str,
+    *,
+    source_filename: str,
+    current_icp: dict[str, Any] | None = None,
+) -> str:
+    payload = {
+        "source_filename": source_filename,
+        "pdf_text": pdf_text,
+        "json_schema": IdealCustomerProfile.model_json_schema(),
+        "current_icp_hint": current_icp,
+        "instructions": (
+            "Fill every required field. Set version to today's date as YYYY-MM-DD "
+            "unless the PDF names a version. Set source to the PDF filename. "
+            "Preserve systems and data_policy from the hint unless the PDF overrides them."
+        ),
+    }
+    return json.dumps(payload, indent=2)

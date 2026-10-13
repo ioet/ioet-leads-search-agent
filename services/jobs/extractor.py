@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from services.agent.bedrock import BedrockClient, BedrockResponseError
+from services.agent.prompts import extract_required_skills_system, extract_required_skills_user
 from services.common.schemas import JobPosting
 
 logger = logging.getLogger(__name__)
-
-_EXTRACT_SYSTEM = (
-    "You extract technical and professional skills explicitly required in job descriptions. "
-    "Return ONLY valid JSON — no markdown."
-)
 
 
 def extract_required_skills(
@@ -26,17 +21,10 @@ def extract_required_skills(
         return []
 
     client = bedrock or BedrockClient(model_id=model_id, complexity="low")
-    payload = {
-        "postings": [p.model_dump(exclude_none=True) for p in postings],
-        "instructions": (
-            "From the job descriptions, list distinct skills, tools, languages, and frameworks "
-            "the employer requires or strongly prefers. Use concise canonical names "
-            "(e.g. Python, React, AWS, Kubernetes). Omit soft skills unless explicitly required. "
-            "Deduplicate case-insensitively."
-        ),
-        "output_schema": {"required_skills": ["string"]},
-    }
-    raw = client.converse_json(_EXTRACT_SYSTEM, json.dumps(payload, indent=2))
+    raw = client.converse_json(
+        extract_required_skills_system(),
+        extract_required_skills_user(postings),
+    )
     return _parse_required_skills(raw)
 
 

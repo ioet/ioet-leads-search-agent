@@ -14,7 +14,15 @@ from services.agent.bedrock import (
 )
 from services.agent.logic import draft_crm_note, draft_outreach_email, match_ioet_skills, score_companies
 from services.common.icp import load_icp
-from services.common.schemas import Company, Contact, JobPostingContext, LeadResult, LeadStatus, SkillMatch
+from services.common.schemas import (
+    Company,
+    Contact,
+    JobPosting,
+    JobPostingContext,
+    LeadResult,
+    LeadStatus,
+    SkillMatch,
+)
 from tests.helpers import assert_http_call_json, assert_json_response_list
 
 
@@ -24,6 +32,22 @@ def test_parse_json_from_fenced_block() -> None:
     assert isinstance(parsed, dict)
     assert parsed == {"note": "hello"}
     assert isinstance(parsed["note"], str)
+
+
+def test_parse_json_from_unclosed_fence() -> None:
+    parsed = parse_json_from_text('```json\n{"note": "hello"}')
+    assert parsed == {"note": "hello"}
+
+
+def test_parse_json_from_truncated_output() -> None:
+    raw = (
+        "```json\n"
+        '{"skill_matches": [{"skill": "Python", "person_or_team": "Ada", "co'
+    )
+    parsed = parse_json_from_text(raw)
+    assert isinstance(parsed, dict)
+    assert parsed["skill_matches"][0]["skill"] == "Python"
+    assert parsed["skill_matches"][0]["person_or_team"] == "Ada"
 
 
 def test_bedrock_converse_http() -> None:
@@ -157,6 +181,13 @@ def test_match_ioet_skills_uses_catalog() -> None:
         job_context=JobPostingContext(
             required_skills=["Python"],
             note="Found 1 job posting(s) via linkedin; extracted 1 required skill(s).",
+            postings=[
+                JobPosting(
+                    title="Engineer",
+                    source="company_website",
+                    description="<script>window.reBambooDomains</script> Lato Vollkorn",
+                )
+            ],
         ),
     )
     catalog = [
@@ -186,6 +217,8 @@ def test_match_ioet_skills_uses_catalog() -> None:
     user_arg = bedrock.converse_json.call_args[0][1]
     assert "Grace Hopper" in user_arg
     assert "Python" in user_arg
+    assert "reBambooDomains" not in user_arg
+    assert "Vollkorn" not in user_arg
 
 
 def test_match_ioet_skills_skips_when_no_required_skills() -> None:
@@ -198,6 +231,22 @@ def test_match_ioet_skills_skips_when_no_required_skills() -> None:
     )
     bedrock = MagicMock()
     result = match_ioet_skills(lead, catalog=[{"employee_id": "1", "display_name": "A", "skills": ["Python"]}], bedrock=bedrock)
+    assert result.skill_matches == []
+    assert result.status == LeadStatus.MATCHED
+    bedrock.converse_json.assert_not_called()
+
+
+def test_match_ioet_skills_skips_empty_skill_values() -> None:
+    lead = LeadResult(
+        company=Company(name="Acme", domain="acme.com"),
+        job_context=JobPostingContext(required_skills=["Python"]),
+    )
+    bedrock = MagicMock()
+    result = match_ioet_skills(
+        lead,
+        catalog=[{"employee_id": "1", "display_name": "A", "skills": []}],
+        bedrock=bedrock,
+    )
     assert result.skill_matches == []
     assert result.status == LeadStatus.MATCHED
     bedrock.converse_json.assert_not_called()
@@ -226,7 +275,20 @@ def test_draft_outreach_email() -> None:
 
     user_arg = bedrock.converse_json.call_args[0][1]
     assert "Ada Lovelace" in user_arg
+    assert "greeting_name" in user_arg
     assert "ioet_skill_matches" in user_arg
+
+
+def test_draft_outreach_email_replaces_generic_greeting() -> None:
+    lead = LeadResult(
+        company=Company(name="Acme", domain="acme.com"),
+        contacts=[Contact(full_name="Ada Lovelace", title="CTO")],
+    )
+    bedrock = MagicMock()
+    bedrock.converse_json.return_value = {"body": "Hello there, we can help your team."}
+    email = draft_outreach_email(lead, bedrock=bedrock)
+    assert email.startswith("Hi Ada,")
+    assert "there" not in email.lower()
 
 
 def test_draft_crm_note_alias() -> None:
@@ -272,7 +334,7 @@ def test_agent_endpoints_forward_model_id() -> None:
     icp = load_icp()
     lead_body = {
         "company": {"name": "Acme", "domain": "acme.com"},
-        "contacts": [],
+        "contacts": [{"full_name": "Ada Lovelace", "title": "CTO"}],
         "skill_matches": [],
         "hubspot_ids": {},
         "status": "enriched",
@@ -320,13 +382,15 @@ def test_agent_endpoints_forward_model_id() -> None:
             json={"lead": lead_body, "model_id": "us.anthropic.claude-sonnet-4-6"},
         )
         assert response.status_code == 200
-        assert response.json()["notes"] == "Subject: Hello\n\nBody"
+        body = response.json()
+        assert body["notes"] is None
+        assert body["contacts"][0]["notes"] == "Subject: Hello\n\nBody"
         assert draft_mock.call_args.kwargs["model_id"] == "us.anthropic.claude-sonnet-4-6"
 
         # Bare lead payload (legacy / some worker shapes)
         response = client.post("/v1/draft-outreach-email", json=lead_body)
         assert response.status_code == 200
-        assert response.json()["notes"] == "Subject: Hello\n\nBody"
+        assert response.json()["contacts"][0]["notes"] == "Subject: Hello\n\nBody"
 
 
 def test_score_endpoint_rejects_unknown_icp_version() -> None:

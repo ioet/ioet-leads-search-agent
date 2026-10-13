@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from enum import Enum
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -120,14 +120,41 @@ def load_icp(path: Path | str | None = None) -> IdealCustomerProfile:
     return IdealCustomerProfile.model_validate(raw)
 
 
-@lru_cache(maxsize=4)
-def _load_icp_from_s3(bucket: str, key: str) -> IdealCustomerProfile:
+_icp_s3_cache: dict[tuple[str, str], tuple[float, IdealCustomerProfile]] = {}
+
+
+def _icp_s3_cache_ttl_seconds() -> float:
+    raw = os.environ.get("ICP_S3_CACHE_TTL_SECONDS", "60").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 60.0
+
+
+def clear_icp_s3_cache() -> None:
+    """Drop cached S3 ICP loads (tests and after a publish)."""
+    _icp_s3_cache.clear()
+
+
+def _s3_client():
     import boto3
 
-    client = boto3.client("s3")
-    obj = client.get_object(Bucket=bucket, Key=key)
+    return boto3.client("s3")
+
+
+def _load_icp_from_s3(bucket: str, key: str) -> IdealCustomerProfile:
+    cache_key = (bucket, key)
+    now = time.monotonic()
+    ttl = _icp_s3_cache_ttl_seconds()
+    cached = _icp_s3_cache.get(cache_key)
+    if cached is not None and ttl > 0 and (now - cached[0]) < ttl:
+        return cached[1]
+
+    obj = _s3_client().get_object(Bucket=bucket, Key=key)
     raw = json.loads(obj["Body"].read().decode("utf-8"))
-    return IdealCustomerProfile.model_validate(raw)
+    icp = IdealCustomerProfile.model_validate(raw)
+    _icp_s3_cache[cache_key] = (now, icp)
+    return icp
 
 
 def outbound_segments(

@@ -1,5 +1,7 @@
 """Workflow WfSpec construction tests (no LittleHorse server required)."""
 
+import pytest
+
 from services.common.schemas import NotifyRequest
 from tests.helpers import assert_model
 from workflow.workers import TASK_HANDLERS, TASK_NAMES
@@ -34,11 +36,13 @@ def test_child_workflow_compiles() -> None:
     assert spec.thread_specs
 
 
-def test_select_top_leads_ordering() -> None:
+def test_select_top_leads_ordering(monkeypatch) -> None:
     import asyncio
     from unittest.mock import MagicMock
 
     from workflow.workers import select_top_leads_task
+
+    monkeypatch.delenv("MAX_COMPANIES", raising=False)
 
     companies = [
         {"name": "Low", "icp_score": 0.1},
@@ -115,8 +119,55 @@ def test_build_campaign_summary_includes_message() -> None:
     )
     assert "demo-001" in notify.message
     assert "dry-run" in notify.message
+    assert "Acme" in notify.message
     assert notify.details["kind"] == "campaign_summary"
     assert notify.details["campaign_id"] == "demo-001"
     assert notify.details["dry_run"] is True
     assert notify.details["leads_processed"] == 1
+    assert notify.details["company_names"] == ["Acme"]
     assert isinstance(notify.details["wf_run_id"], str)
+
+
+def test_lh_id_prefers_protobuf_id() -> None:
+    from types import SimpleNamespace
+
+    from workflow.workers import _lh_id
+
+    dump = (
+        'id: "20c947ccb1cb47fb888783cc6578938d"\n'
+        "parent_wf_run_id {\n"
+        '  id: "57a393bbe71149968579ead54dd0afc0"\n'
+        "}\n"
+    )
+    assert _lh_id(dump) == "20c947ccb1cb47fb888783cc6578938d"
+    assert _lh_id(SimpleNamespace(id="abc123")) == "abc123"
+    assert _lh_id("plain-id") == "plain-id"
+
+
+def test_wrapped_handler_reports_lh_task_exception() -> None:
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from littlehorse.exceptions import LHTaskException
+
+    from services.common.catalog_store import CatalogNotFoundError
+    from workflow.workers import TASK_HANDLERS
+
+    ctx = MagicMock()
+    ctx.wf_run_id = "wf-err-1"
+    ctx.task_run_id.task_guid = "guid-abc"
+    ctx.log = MagicMock()
+    lead = {"company": {"name": "Acme"}}
+
+    with patch(
+        "workflow.workers.require_skills_catalog",
+        side_effect=CatalogNotFoundError("Skills catalog not found"),
+    ):
+        with pytest.raises(LHTaskException) as caught:
+            asyncio.run(TASK_HANDLERS["match-ioet-skills"](lead, "missing-ref", ctx))
+
+    assert caught.value.exception_name == "STEP_FAILED"
+    assert "match-ioet-skills failed" in caught.value.message
+    assert "Skills catalog not found" in caught.value.message
+    assert "task_guid=guid-abc" in caught.value.message
+    ctx.log.assert_called()

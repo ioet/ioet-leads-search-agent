@@ -14,6 +14,7 @@ from services.agent.bedrock import BedrockConfigError, BedrockResponseError
 from services.common.http import create_app
 from services.common.schemas import JobPostingContext, LeadResult, LeadStatus
 from services.jobs.extractor import extract_required_skills
+from services.jobs.logic import format_job_posting_notes
 
 configure_logging()
 logger = logging.getLogger("mocks.jobs")
@@ -47,7 +48,6 @@ def extract_job_skills_mock(lead: LeadResult) -> LeadResult:
         return lead.model_copy(
             update={
                 "job_context": context,
-                "notes": _merge_notes(lead.notes, note),
                 "status": LeadStatus.ENRICHED,
             }
         )
@@ -72,10 +72,14 @@ def extract_job_skills_mock(lead: LeadResult) -> LeadResult:
         sources_searched=sources,
         note=note,
     )
+    links = format_job_posting_notes(postings)
+    company = lead.company
+    if links:
+        company = company.model_copy(update={"notes": _merge_notes(company.notes, links)})
     return lead.model_copy(
         update={
+            "company": company,
             "job_context": context,
-            "notes": _merge_notes(lead.notes, note),
             "status": LeadStatus.ENRICHED,
         }
     )

@@ -88,3 +88,17 @@ def test_require_skills_catalog_raises_when_missing(tmp_path, monkeypatch) -> No
     monkeypatch.delenv("SKILLS_CATALOG_S3_BUCKET", raising=False)
     with pytest.raises(CatalogNotFoundError, match="missing-ref"):
         require_skills_catalog("missing-ref")
+
+
+def test_require_skills_catalog_falls_back_to_latest(tmp_path, monkeypatch) -> None:
+    from services.common.catalog_store import require_skills_catalog
+
+    monkeypatch.setenv("SKILLS_CATALOG_LOCAL_DIR", str(tmp_path))
+    monkeypatch.delenv("SKILLS_CATALOG_S3_BUCKET", raising=False)
+    latest = [{"employee_id": "3", "display_name": "Ada", "skills": ["Python"]}]
+    save_skills_catalog("latest", latest)
+
+    assert require_skills_catalog("missing-ref") == latest
+    # Parent fetch step failed: LittleHorse passes a NULL catalog-ref.
+    assert require_skills_catalog(None) == latest
+    assert require_skills_catalog("") == latest

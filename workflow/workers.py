@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,9 +20,15 @@ load_dotenv(ROOT / ".env")
 
 import littlehorse
 from littlehorse.config import LHConfig
+from littlehorse.exceptions import LHTaskException
 from littlehorse.worker import LHTaskWorker, WorkerContext
 
-from services.common.catalog_store import require_skills_catalog, save_skills_catalog
+from services.common.catalog_store import (
+    LATEST_CATALOG_REF,
+    load_skills_catalog,
+    require_skills_catalog,
+    save_skills_catalog,
+)
 from services.common.limits import max_companies, max_contacts_per_company
 from services.common.service_client import post_json
 from services.agent.skills_source import fetch_skills_catalog
@@ -52,6 +60,89 @@ LOCAL_TASK_NAMES = [
 ]
 
 TASK_NAMES = HTTP_TASK_NAMES + LOCAL_TASK_NAMES
+
+_LH_ID_RE = re.compile(r'id:\s*"([^"]+)"')
+
+
+def _lh_id(value: Any) -> str:
+    """LittleHorse WfRunId as a short string (not the protobuf text dump)."""
+    if value is None:
+        return ""
+    ident = getattr(value, "id", None)
+    if isinstance(ident, str) and ident.strip():
+        return ident.strip()
+    text = str(value).strip()
+    if not text:
+        return ""
+    match = _LH_ID_RE.search(text)
+    if match:
+        return match.group(1)
+    if "\n" not in text and "{" not in text:
+        return text
+    return text.split("\n", 1)[0][:80]
+
+
+def _task_guid(ctx: WorkerContext | None) -> str:
+    if ctx is None:
+        return ""
+    try:
+        return str(ctx.task_run_id.task_guid)
+    except Exception:
+        return str(getattr(ctx, "idempotency_key", "") or "")
+
+
+def _raise_step_failed(ctx: WorkerContext | None, task_name: str, exc: BaseException) -> None:
+    """Report a short, grep-able failure to the LH UI (Failures tab + logOutput)."""
+    detail = " ".join(str(exc).split())[:800] or type(exc).__name__
+    wf_run_id = _lh_id(getattr(ctx, "wf_run_id", None)) if ctx is not None else ""
+    guid = _task_guid(ctx)
+    parts = [f"{task_name} failed: {detail}"]
+    if wf_run_id:
+        parts.append(f"wf_run={wf_run_id}")
+    if guid:
+        parts.append(f"task_guid={guid}")
+    parts.append("grep ECS worker logs for task_guid")
+    message = "; ".join(parts)
+    if ctx is not None:
+        try:
+            ctx.log(message)
+        except Exception:
+            pass
+    logger.exception("%s", message)
+    raise LHTaskException("STEP_FAILED", message) from exc
+
+
+def _with_lh_failure(task_name: str, fn: Any) -> Any:
+    """Convert uncaught exceptions into LHTaskException so the UI shows the message."""
+
+    @functools.wraps(fn)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        ctx = kwargs.get("ctx")
+        if ctx is None and args:
+            last = args[-1]
+            if isinstance(last, WorkerContext) or hasattr(last, "wf_run_id"):
+                ctx = last
+        try:
+            return await fn(*args, **kwargs)
+        except LHTaskException:
+            raise
+        except Exception as exc:
+            _raise_step_failed(ctx, task_name, exc)
+
+    return wrapped
+
+
+def _company_names(companies: list[Any]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in companies or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 def _require_service_urls() -> None:
@@ -181,8 +272,21 @@ async def extract_job_skills_task(lead: dict[str, Any], ctx: WorkerContext) -> d
 
 async def fetch_ioet_skills_catalog_task(ctx: WorkerContext) -> str:
     """Local: pull BambooHR catalog once per parent campaign and persist to durable storage."""
-    catalog = await asyncio.to_thread(fetch_skills_catalog)
-    catalog_ref = str(ctx.wf_run_id)
+    catalog_ref = _lh_id(ctx.wf_run_id)
+    try:
+        catalog = await asyncio.to_thread(fetch_skills_catalog)
+    except Exception as exc:
+        catalog = await asyncio.to_thread(load_skills_catalog, LATEST_CATALOG_REF)
+        if catalog is None:
+            raise
+        logger.warning(
+            "fetch-ioet-skills-catalog live fetch failed (%s); using last good snapshot "
+            "(%d employees)",
+            exc,
+            len(catalog),
+        )
+    else:
+        await asyncio.to_thread(save_skills_catalog, LATEST_CATALOG_REF, catalog)
     await asyncio.to_thread(save_skills_catalog, catalog_ref, catalog)
     logger.info(
         "fetch-ioet-skills-catalog ref=%s employees=%d",
@@ -241,10 +345,13 @@ async def build_campaign_summary_task(
     """Local: notification payload after fan-out completes."""
     count = len(companies or [])
     dry = " (dry-run)" if dry_run else ""
+    names = _company_names(companies)
     message = (
         f"Leads campaign `{campaign_id}`{dry}: "
         f"{count} published, 0 failed, 0 skipped ({count} processed)."
     )
+    if names:
+        message += " Companies: " + ", ".join(names) + "."
     return {
         "message": message,
         "details": {
@@ -254,8 +361,9 @@ async def build_campaign_summary_task(
             "leads_published": count,
             "leads_failed": 0,
             "leads_skipped": 0,
+            "company_names": names,
             "dry_run": bool(dry_run),
-            "wf_run_id": str(ctx.wf_run_id),
+            "wf_run_id": _lh_id(ctx.wf_run_id),
         },
     }
 
@@ -272,7 +380,7 @@ async def build_empty_search_notification_task(
         f":mag: No companies found for campaign `{campaign_id}` "
         f"using ICP `{icp_version}` (segments: {segments})."
     )
-    wf_run_id = str(ctx.wf_run_id)
+    wf_run_id = _lh_id(ctx.wf_run_id)
     if wf_run_id:
         message += f" WfRun `{wf_run_id}`."
     return {
@@ -299,14 +407,15 @@ async def notify_failure_task(
     error_type: str,
     ctx: WorkerContext,
 ) -> str:
+    wf_run_id = _lh_id(ctx.wf_run_id)
     result = await post_json(
         "notify-failure",
         "/v1/failure",
         {
-            "campaign_id": str(ctx.wf_run_id),
-            "error": f"{step_name}: {error_type}",
-            "wf_run_id": str(ctx.wf_run_id),
+            "campaign_id": wf_run_id,
+            "wf_run_id": wf_run_id,
             "step_name": step_name,
+            "error": error_type,
         },
     )
     if isinstance(result, dict):
@@ -314,7 +423,7 @@ async def notify_failure_task(
     return "sent"
 
 
-TASK_HANDLERS: dict[str, Any] = {
+_RAW_TASK_HANDLERS: dict[str, Any] = {
     "search-companies": search_companies_task,
     "score-companies-icp": score_companies_icp_task,
     "select-top-leads": select_top_leads_task,
@@ -330,6 +439,10 @@ TASK_HANDLERS: dict[str, Any] = {
     "build-empty-search-notification": build_empty_search_notification_task,
     "notify": notify_task,
     "notify-failure": notify_failure_task,
+}
+
+TASK_HANDLERS: dict[str, Any] = {
+    name: _with_lh_failure(name, fn) for name, fn in _RAW_TASK_HANDLERS.items()
 }
 
 

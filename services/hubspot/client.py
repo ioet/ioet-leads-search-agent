@@ -75,12 +75,15 @@ class HubSpotClient:
             verify = self.verify()
             ids = {
                 "company": f"dry-run-company-{uuid.uuid4().hex[:8]}",
-                "note": f"dry-run-note-{uuid.uuid4().hex[:8]}",
                 "verify_ok": "true" if verify.get("ok") else "false",
                 "companies_visible": str(verify.get("companies_visible", 0)),
             }
-            for idx, _ in enumerate(payload.get("contacts") or []):
+            if payload.get("company_note"):
+                ids["note"] = f"dry-run-note-{uuid.uuid4().hex[:8]}"
+            for idx, contact in enumerate(payload.get("contacts") or []):
                 ids[f"contact_{idx}"] = f"dry-run-contact-{uuid.uuid4().hex[:8]}"
+                if isinstance(contact, dict) and contact.get("note"):
+                    ids[f"contact_note_{idx}"] = f"dry-run-contact-note-{uuid.uuid4().hex[:8]}"
             return clean.model_copy(
                 update={"hubspot_ids": ids, "status": LeadStatus.PUBLISHED}
             )
@@ -89,13 +92,17 @@ class HubSpotClient:
         ids: dict[str, str] = {"company": company_id}
 
         for idx, contact in enumerate(payload.get("contacts") or []):
+            contact_note = contact.get("note")
             contact_id = self._upsert_contact(contact, company_id)
             if contact_id:
                 ids[f"contact_{idx}"] = contact_id
+            if contact_id and contact_note:
+                note_id = self._create_note(str(contact_note), contact_id=contact_id)
+                ids[f"contact_note_{idx}"] = note_id
 
-        note_body = payload.get("note")
-        if note_body:
-            note_id = self._create_note(note_body, company_id)
+        company_note = payload.get("company_note")
+        if company_note:
+            note_id = self._create_note(str(company_note), company_id=company_id)
             ids["note"] = note_id
 
         return clean.model_copy(update={"hubspot_ids": ids, "status": LeadStatus.PUBLISHED})
@@ -153,7 +160,6 @@ class HubSpotClient:
         return str(results[0]["id"])
 
     def _upsert_contact(self, props: dict[str, Any], company_id: str) -> str | None:
-        # Contacts without email (denylist): create with name/title/LinkedIn only.
         full_name = props.get("name") or ""
         parts = full_name.split(None, 1)
         first = parts[0] if parts else "Unknown"
@@ -168,6 +174,10 @@ class HubSpotClient:
             hs_props["jobtitle"] = props["title"]
         if linkedin:
             hs_props["hs_linkedin_url"] = linkedin
+        if props.get("email"):
+            hs_props["email"] = props["email"]
+        if props.get("phone"):
+            hs_props["phone"] = props["phone"]
 
         # Prefer normalized LinkedIn; fall back to firstname+lastname at this company.
         existing = None
@@ -273,7 +283,13 @@ class HubSpotClient:
         except requests.HTTPError:
             logger.warning("Failed to associate contact %s with company %s", contact_id, company_id)
 
-    def _create_note(self, body: str, company_id: str) -> str:
+    def _create_note(
+        self,
+        body: str,
+        *,
+        company_id: str | None = None,
+        contact_id: str | None = None,
+    ) -> str:
         created = self._request(
             "POST",
             "/crm/v3/objects/notes",
@@ -285,12 +301,22 @@ class HubSpotClient:
             },
         )
         note_id = str(created["id"])
-        try:
-            self._request(
-                "PUT",
-                f"/crm/v4/objects/notes/{note_id}/associations/companies/{company_id}",
-                [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 190}],
-            )
-        except requests.HTTPError:
-            logger.warning("Failed to associate note %s with company %s", note_id, company_id)
+        if company_id:
+            try:
+                self._request(
+                    "PUT",
+                    f"/crm/v4/objects/notes/{note_id}/associations/companies/{company_id}",
+                    [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 190}],
+                )
+            except requests.HTTPError:
+                logger.warning("Failed to associate note %s with company %s", note_id, company_id)
+        if contact_id:
+            try:
+                self._request(
+                    "PUT",
+                    f"/crm/v4/objects/notes/{note_id}/associations/contacts/{contact_id}",
+                    [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 202}],
+                )
+            except requests.HTTPError:
+                logger.warning("Failed to associate note %s with contact %s", note_id, contact_id)
         return note_id

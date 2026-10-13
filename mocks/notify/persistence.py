@@ -6,7 +6,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from services.notify.client import format_failure_text
 
 
 def output_dir() -> Path:
@@ -23,15 +23,7 @@ def format_slack_text(msg_type: str, payload: dict[str, Any]) -> str:
     """Format the text that would be posted to Slack."""
     if msg_type == "notify":
         return str(payload.get("message") or "").strip()
-
-    campaign = payload.get("campaign_id") or "unknown"
-    error = payload.get("error") or payload.get("message") or str(payload)
-    lead = payload.get("lead") or payload.get("company") or ""
-    text = f":warning: Leads workflow failure — campaign `{campaign}`"
-    if lead:
-        text += f" lead `{lead}`"
-    text += f": {error}"
-    return text
+    return format_failure_text(payload)
 
 
 def persist_messages(messages: list[dict[str, Any]]) -> Path:

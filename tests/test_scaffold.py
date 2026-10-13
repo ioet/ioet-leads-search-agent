@@ -30,11 +30,20 @@ def test_service_health_endpoints() -> None:
     from services.agent.app import app as agent_app
     from services.apollo.app import app as apollo_app
     from services.hubspot.app import app as hubspot_app
+    from services.icp.app import app as icp_app
     from services.jobs.app import app as jobs_app
     from services.notify.app import app as notify_app
     from services.skills.app import app as skills_app
 
-    for app in (apollo_app, agent_app, skills_app, hubspot_app, jobs_app, notify_app):
+    for app in (
+        apollo_app,
+        agent_app,
+        skills_app,
+        hubspot_app,
+        jobs_app,
+        notify_app,
+        icp_app,
+    ):
         client = TestClient(app)
         response = client.get("/health")
         assert response.status_code == 200

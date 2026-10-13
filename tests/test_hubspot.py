@@ -17,10 +17,19 @@ def _sample_lead() -> LeadResult:
             domain="acme.com",
             industry="fintech",
             linkedin_url="https://linkedin.com/company/acme",
+            notes="Job postings:\n- Engineer: https://acme.com/careers",
         ),
-        contacts=[Contact(full_name="Ada Lovelace", title="CTO", linkedin_url="https://linkedin.com/in/ada")],
+        contacts=[
+            Contact(
+                full_name="Ada Lovelace",
+                title="CTO",
+                linkedin_url="https://linkedin.com/in/ada",
+                email="ada@acme.com",
+                phone="+1-555-0100",
+                notes="Hi Ada,\n\nWe can help staff your open roles.",
+            )
+        ],
         skill_matches=[SkillMatch(skill="Python", person_or_team="Platform", confidence=0.91)],
-        notes="Strong ICP fit",
     )
 
 
@@ -120,6 +129,24 @@ def test_upsert_lead_http_flow(monkeypatch) -> None:
     assert contact_create["properties"]["lastname"] == "Lovelace"
     assert contact_create["properties"]["jobtitle"] == "CTO"
     assert contact_create["properties"]["hs_linkedin_url"] == "https://www.linkedin.com/in/ada"
+    assert contact_create["properties"]["email"] == "ada@acme.com"
+    assert contact_create["properties"]["phone"] == "+1-555-0100"
+
+    note_bodies = [
+        (payload or {}).get("properties", {}).get("hs_note_body")
+        for method, url, payload in captured
+        if method == "POST" and url.endswith("/notes")
+    ]
+    assert any(body and "Hi Ada," in body for body in note_bodies)
+    assert any(body and "https://acme.com/careers" in body for body in note_bodies)
+    assert any(
+        method == "PUT" and "/associations/contacts/" in url
+        for method, url, _payload in captured
+    )
+    assert any(
+        method == "PUT" and "/associations/companies/" in url
+        for method, url, _payload in captured
+    )
 
     contact_searches = [
         payload
@@ -261,7 +288,8 @@ def test_hubspot_http_endpoints(monkeypatch) -> None:
     sanitized = assert_json_response(sanitize.json(), LeadResult)
     assert sanitized.company.name == "Acme"
     assert sanitized.contacts[0].full_name == "Ada Lovelace"
-    assert "email" not in sanitized.contacts[0].model_dump()
+    assert sanitized.contacts[0].email == "ada@acme.com"
+    assert sanitized.contacts[0].phone == "+1-555-0100"
 
     dry = client.post("/v1/upsert-lead", json={"lead": lead, "dry_run": True})
     assert dry.status_code == 200

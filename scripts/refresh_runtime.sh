@@ -3,6 +3,10 @@
 # force an ECS redeploy (so MUTABLE :latest actually rolls out).
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=aws_from_tfvars.sh
+source "$ROOT/scripts/aws_from_tfvars.sh"
+
 AWS_REGION="${AWS_REGION:-us-east-1}"
 PROJECT_NAME="${PROJECT_NAME:-leads-search-agent}"
 ENVIRONMENT="${ENVIRONMENT:-prod}"
@@ -29,7 +33,7 @@ SERVICES_URI="${SERVICES_REPO}@${DIGEST}"
 echo "Using services image ${SERVICES_URI}"
 
 PREFIX="${PROJECT_NAME}-${ENVIRONMENT}"
-for name in apollo agent skills hubspot notify jobs; do
+for name in apollo agent skills hubspot notify jobs icp; do
   echo "Updating Lambda ${PREFIX}-${name}"
   aws lambda update-function-code \
     --region "${AWS_REGION}" \

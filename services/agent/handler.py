@@ -74,16 +74,25 @@ def match_skills_endpoint(request: MatchSkillsRequest) -> LeadResult:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+def _attach_email_to_primary_contact(lead: LeadResult, email: str) -> LeadResult:
+    """Store the outreach draft on the primary contact, leaving company notes alone."""
+    if not lead.contacts:
+        return lead
+    contacts = list(lead.contacts)
+    contacts[0] = contacts[0].model_copy(update={"notes": email})
+    return lead.model_copy(update={"contacts": contacts})
+
+
 @router.post("/draft-outreach-email")
 def draft_outreach_email_endpoint(body: dict[str, Any]) -> LeadResult:
-    """Draft a customer-centric outreach email and attach it to the lead notes.
+    """Draft a customer-centric outreach email and attach it to the primary contact notes.
 
     Accepts either ``{"lead": {...}, "model_id": "..."}`` or a bare lead object.
     """
     try:
         lead, model_id = _parse_draft_outreach_body(body)
         email = draft_outreach_email(lead, model_id=model_id)
-        return lead.model_copy(update={"notes": email})
+        return _attach_email_to_primary_contact(lead, email)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except BedrockConfigError as exc:

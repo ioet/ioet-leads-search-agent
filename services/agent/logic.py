@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from services.agent.bedrock import BedrockClient, BedrockConfigError, BedrockResponseError
@@ -110,19 +111,56 @@ def match_ioet_skills(
         rows = fetch_skills_catalog()
     else:
         rows = catalog
-    if not rows:
-        logger.warning("Empty skills catalog; returning lead unchanged")
-        return lead
+    usable = [row for row in rows if (row.get("skills") or [])]
+    if not usable:
+        logger.warning("Skills catalog has no skill values; skipping Bedrock match for %s", lead.company.name)
+        return lead.model_copy(update={"skill_matches": [], "status": LeadStatus.MATCHED})
 
     client = bedrock or BedrockClient(model_id=model_id, complexity="low")
     raw = client.converse_json(
         match_skills_system(),
-        match_skills_user(lead, rows),
+        match_skills_user(lead, usable),
     )
     matches = _parse_skill_matches(raw)
     return lead.model_copy(
         update={"skill_matches": matches, "status": LeadStatus.MATCHED},
     )
+
+
+_GENERIC_GREETING = re.compile(
+    r"^(?:hi|hello|hey)(?:\s+there)?\s*[,!.\-—:]*\s*",
+    re.IGNORECASE,
+)
+
+
+def _greeting_name(full_name: str | None) -> str | None:
+    if not full_name or not full_name.strip():
+        return None
+    return full_name.strip().split()[0]
+
+
+def _address_contact(email: str, full_name: str | None) -> str:
+    """Open the email body with the contact's first name."""
+    first = _greeting_name(full_name)
+    if not first:
+        return email
+
+    subject = ""
+    body = email
+    if email.startswith("Subject:"):
+        subject, _, rest = email.partition("\n\n")
+        body = rest
+
+    stripped = body.strip()
+    if re.match(rf"^(?:hi|hello|hey)\s+{re.escape(first)}\b", stripped, re.IGNORECASE):
+        addressed = stripped
+    else:
+        remainder = _GENERIC_GREETING.sub("", stripped, count=1).strip()
+        addressed = f"Hi {first},\n\n{remainder}" if remainder else f"Hi {first},"
+
+    if subject:
+        return f"{subject}\n\n{addressed}" if addressed else subject
+    return addressed
 
 
 def _format_outreach_email(raw: Any) -> str:
@@ -151,7 +189,9 @@ def draft_outreach_email(
         draft_outreach_email_system(),
         draft_outreach_email_user(lead),
     )
-    return _format_outreach_email(raw)
+    email = _format_outreach_email(raw)
+    contact_name = lead.contacts[0].full_name if lead.contacts else None
+    return _address_contact(email, contact_name)
 
 
 def draft_crm_note(

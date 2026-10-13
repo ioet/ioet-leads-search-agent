@@ -8,6 +8,7 @@ on:
       - "services/**"
       - "workflow/**"
       - "data/icp.json"
+      - "web/**"
       - "Dockerfile.lambda"
       - "Dockerfile.workers"
       - "requirements*.txt"
@@ -17,6 +18,7 @@ on:
       - "services/**"
       - "workflow/**"
       - "data/icp.json"
+      - "web/**"
       - "Dockerfile.lambda"
       - "Dockerfile.workers"
       - "requirements*.txt"
@@ -38,6 +40,11 @@ on:
         required: true
         default: true
         type: boolean
+      deploy_web:
+        description: Build and publish the ICP admin SPA to CloudFront
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   id-token: write
@@ -56,6 +63,7 @@ jobs:
       app: ${{ steps.filter.outputs.app }}
       icp: ${{ steps.filter.outputs.icp }}
       workflow: ${{ steps.filter.outputs.workflow }}
+      web: ${{ steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -73,6 +81,8 @@ jobs:
             workflow:
               - 'workflow/**'
               - 'requirements*.txt'
+            web:
+              - 'web/**'
 
   deploy:
     name: Build and refresh
@@ -145,6 +155,54 @@ jobs:
             exit 1
           fi
           aws s3 cp data/icp.json "s3://${ICP_BUCKET}/${ICP_S3_KEY}"
+
+  deploy-web:
+    name: Deploy ICP admin SPA
+    needs: changes
+    if: >
+      github.event_name != 'pull_request' &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.deploy_web) ||
+        (github.event_name == 'push' && needs.changes.outputs.web == 'true')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-web-${{ github.run_id }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build and publish SPA
+        env:
+          WEB_BUCKET: ${{ vars.WEB_BUCKET }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEB_BUCKET}" ] || [ -z "${CLOUDFRONT_DISTRIBUTION_ID}" ]; then
+            echo "::error::Set Actions variables WEB_BUCKET and CLOUDFRONT_DISTRIBUTION_ID (terraform outputs web_bucket / cloudfront_distribution_id)"
+            exit 1
+          fi
+          API_URL="$(aws lambda get-function-url-config \
+            --function-name "${PROJECT_NAME}-${ENVIRONMENT}-icp" \
+            --query 'FunctionUrl' \
+            --output text | sed 's:/*$::')"
+          cd web
+          npm ci
+          VITE_ICP_API_URL="${API_URL}" npm run build
+          aws s3 sync dist "s3://${WEB_BUCKET}" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --paths "/*"
 
   register-lh:
     name: Register LittleHorse specs

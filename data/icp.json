@@ -127,8 +127,10 @@
       "industry",
       "linkedin_url",
       "title",
+      "email",
+      "phone",
       "skill_match_note"
     ],
-    "hubspot_denylist": ["email", "phone"]
+    "hubspot_denylist": ["ssn", "salary"]
   }
 }

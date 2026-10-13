@@ -21,6 +21,23 @@ def _merge_notes(existing: str | None, addition: str) -> str:
     return addition.strip()
 
 
+def format_job_posting_notes(postings: list[JobPosting]) -> str | None:
+    """Company-note body: one link per job posting that has a URL."""
+    lines = [f"- {posting.title}: {posting.url}" for posting in postings if posting.url]
+    if not lines:
+        return None
+    return "Job postings:\n" + "\n".join(lines)
+
+
+def _with_job_links(lead: LeadResult, postings: list[JobPosting]) -> LeadResult:
+    addition = format_job_posting_notes(postings)
+    if not addition:
+        return lead
+    notes = _merge_notes(lead.company.notes, addition)
+    company = lead.company.model_copy(update={"notes": notes})
+    return lead.model_copy(update={"company": company})
+
+
 def discover_job_postings(lead: LeadResult) -> tuple[list[JobPosting], list[str]]:
     """Query all enabled sources; never raises — per-source failures are logged."""
     sources = get_enabled_sources()
@@ -72,7 +89,6 @@ def extract_job_skills(
         return lead.model_copy(
             update={
                 "job_context": context,
-                "notes": _merge_notes(lead.notes, note),
                 "status": LeadStatus.ENRICHED,
             }
         )
@@ -102,10 +118,9 @@ def extract_job_skills(
         sources_searched=sources_searched,
         note=note,
     )
-    return lead.model_copy(
+    return _with_job_links(lead, postings).model_copy(
         update={
             "job_context": context,
-            "notes": _merge_notes(lead.notes, note),
             "status": LeadStatus.ENRICHED,
         }
     )

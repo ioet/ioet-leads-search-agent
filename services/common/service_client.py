@@ -33,8 +33,13 @@ async def post_json(task_name: str, path: str, payload: Any) -> Any:
 
     response = await asyncio.to_thread(_post)
     if not response.ok:
-        logger.error("%s failed: %s %s", task_name, response.status_code, response.text)
-        response.raise_for_status()
+        snippet = (response.text or response.reason or "").strip()
+        snippet = " ".join(snippet.split())[:400]
+        logger.error("%s failed: %s %s", task_name, response.status_code, snippet)
+        raise RuntimeError(
+            f"{task_name} HTTP {response.status_code}"
+            + (f": {snippet}" if snippet else "")
+        )
     result = response.json()
     if isinstance(result, dict):
         logger.info("%s response keys: %s", task_name, list(result.keys()))

@@ -61,10 +61,21 @@ def test_hubspot_mock_upsert_dry_run(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HUBSPOT_MOCK_OUTPUT_DIR", str(tmp_path))
     client = TestClient(hubspot_app)
     lead = {
-        "company": {"name": "Acme", "domain": "acme.com"},
-        "contacts": [{"full_name": "Ada", "title": "CTO"}],
+        "company": {
+            "name": "Acme",
+            "domain": "acme.com",
+            "notes": "Job postings:\n- Engineer: https://acme.com/careers",
+        },
+        "contacts": [
+            {
+                "full_name": "Ada",
+                "title": "CTO",
+                "email": "ada@acme.com",
+                "phone": "+1-555-0100",
+                "notes": "Subject: Hello\n\nHi Ada, we can help with Python.",
+            }
+        ],
         "skill_matches": [{"skill": "Python", "person_or_team": "Ana", "confidence": 0.9}],
-        "notes": "Subject: Hello\n\nHi Ada, we can help with Python.",
     }
     assert_json_response(lead, LeadResult)
     response = client.post("/v1/upsert-lead", json={"lead": lead, "dry_run": True})
@@ -85,15 +96,24 @@ def test_hubspot_mock_upsert_dry_run(tmp_path, monkeypatch) -> None:
     store_file = tmp_path / "store.json"
     lead_file = tmp_path / "leads" / "acme.com.json"
     note_file = tmp_path / "leads" / "acme.com-note.txt"
+    contact_note_file = tmp_path / "leads" / "acme.com-contact-note.txt"
     assert store_file.is_file()
     assert lead_file.is_file()
     assert note_file.is_file()
-    assert "Subject: Hello" in note_file.read_text(encoding="utf-8")
+    assert contact_note_file.is_file()
+    assert "https://acme.com/careers" in note_file.read_text(encoding="utf-8")
+    assert "Subject: Hello" in contact_note_file.read_text(encoding="utf-8")
 
     contact = next(iter(store_body["contacts"].values()))
     assert contact["company"]["domain"] == "acme.com"
     assert contact["company"]["name"] == "Acme"
-    assert store_body["notes"][0]["company"]["domain"] == "acme.com"
+    assert contact["email"] == "ada@acme.com"
+    assert contact["phone"] == "+1-555-0100"
+    company_notes = [note for note in store_body["notes"] if note.get("company_id")]
+    contact_notes = [note for note in store_body["notes"] if note.get("contact_id")]
+    assert company_notes[0]["company"]["domain"] == "acme.com"
+    assert "https://acme.com/careers" in company_notes[0]["body"]
+    assert "Subject: Hello" in contact_notes[0]["body"]
 
 
 def test_notify_mock_writes_slack_files(tmp_path, monkeypatch) -> None:

@@ -9,7 +9,7 @@ from littlehorse.workflow import Workflow, WorkflowThread
 
 CHILD_WF_NAME = "enrich-and-publish-lead"
 
-TASK_TIMEOUT_SECONDS = int(os.environ.get("TASK_TIMEOUT_SECONDS", "120"))
+TASK_TIMEOUT_SECONDS = int(os.environ.get("TASK_TIMEOUT_SECONDS", "161"))
 TASK_RETRIES = int(os.environ.get("TASK_RETRIES", "3"))
 
 
@@ -57,7 +57,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         lead.assign(find_out)
-        wf.handle_error(find_out, _on_error_notify_and_continue("find-decision-makers"))
+        wf.handle_any_failure(find_out, _on_error_notify_and_continue("find-decision-makers"))
 
         sanitize_out = wf.execute(
             "sanitize-public-fields",
@@ -67,7 +67,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         lead.assign(sanitize_out)
-        wf.handle_error(
+        wf.handle_any_failure(
             sanitize_out, _on_error_notify_and_continue("sanitize-public-fields")
         )
 
@@ -79,7 +79,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         lead.assign(job_skills_out)
-        wf.handle_error(job_skills_out, _on_error_notify_and_continue("extract-job-skills"))
+        wf.handle_any_failure(job_skills_out, _on_error_notify_and_continue("extract-job-skills"))
 
         match_out = wf.execute(
             "match-ioet-skills",
@@ -90,7 +90,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         lead.assign(match_out)
-        wf.handle_error(match_out, _on_error_notify_and_continue("match-ioet-skills"))
+        wf.handle_any_failure(match_out, _on_error_notify_and_continue("match-ioet-skills"))
 
         email_out = wf.execute(
             "draft-outreach-email",
@@ -100,7 +100,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         lead.assign(email_out)
-        wf.handle_error(email_out, _on_error_notify_and_continue("draft-outreach-email"))
+        wf.handle_any_failure(email_out, _on_error_notify_and_continue("draft-outreach-email"))
 
         upsert_out = wf.execute(
             "upsert-hubspot",
@@ -111,7 +111,7 @@ def get_workflow() -> Workflow:
             exponential_backoff=_retry_policy(),
         )
         lead.assign(upsert_out)
-        wf.handle_error(upsert_out, _on_error_notify_and_continue("upsert-hubspot"))
+        wf.handle_any_failure(upsert_out, _on_error_notify_and_continue("upsert-hubspot"))
 
         wf.complete(lead)
 

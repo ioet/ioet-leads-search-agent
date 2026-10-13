@@ -6,10 +6,12 @@ LittleHorse-orchestrated pipeline that discovers companies via Apollo, scores th
 
 ```
 workflow/          WfSpecs, TaskDefs, thin LH workers (HTTP bridge)
-services/          Microservices (agent, apollo, skills, hubspot, notify, jobs)
+services/          Microservices (agent, apollo, skills, hubspot, notify, jobs, icp)
 services/common/   Shared schemas, ICP model, HTTP helpers, secrets bootstrap
-scripts/           Build/push images, refresh Lambda/ECS, register LH
+infrastructure/    Terraform (Lambda, ECS, ECR, S3, CloudFront, Secrets Manager)
+scripts/           Apply infra, build/push images, refresh Lambda/ECS, register LH, deploy web
 data/icp.json      Canonical ICP configuration
+web/               React ICP admin SPA (CloudFront)
 ```
 
 ## Prerequisites
@@ -20,7 +22,9 @@ data/icp.json      Canonical ICP configuration
 
 ## AWS deploy
 
-Infrastructure lives in **infra-terraform** (`ioet-primary/ioet-leads-search`). This repo’s GitHub Actions workflow builds/pushes `:latest` images, refreshes Lambdas/ECS, uploads `data/icp.json` when it changes, and re-registers LittleHorse specs when `workflow/` changes.
+Terraform in [`infrastructure/`](infrastructure/README.md) provisions Lambda Function URLs, ECS workers, ECR, S3, and Secrets Manager (same ioet-primary layout as the former infra-terraform stack). Copy `infrastructure/terraform.tfvars.example` to `terraform.tfvars`, put AWS credentials there, and run `./scripts/apply_infra.sh`.
+
+GitHub Actions still builds/pushes `:latest` images, refreshes Lambdas/ECS, uploads `data/icp.json` when it changes, and re-registers LittleHorse specs when `workflow/` changes.
 
 See [docs/deploy.md](docs/deploy.md).
 
@@ -48,6 +52,7 @@ docker compose up -d
 - HubSpot: http://localhost:8004/health
 - Notify: http://localhost:8005/health
 - Jobs: http://localhost:8006/health
+- ICP admin API: http://localhost:8007/health
 
 **Option B — run services individually:**
 
@@ -57,6 +62,8 @@ uvicorn services.agent.app:app --port 8002 --reload
 uvicorn services.skills.app:app --port 8003 --reload
 uvicorn services.hubspot.app:app --port 8004 --reload
 uvicorn services.notify.app:app --port 8005 --reload
+uvicorn services.jobs.app:app --port 8006 --reload
+uvicorn services.icp.app:app --port 8007 --reload
 ```
 
 ## Integration services (step 3)
@@ -69,6 +76,13 @@ uvicorn services.notify.app:app --port 8005 --reload
 | hubspot | 8004 | `POST /v1/sanitize-public-fields`, `POST /v1/upsert-lead` |
 | notify | 8005 | `POST /v1/notify`, `POST /v1/failure` |
 | jobs | 8006 | `POST /v1/extract-job-skills` |
+| icp | 8007 | `POST /v1/icp/extract`, `PUT /v1/icp`, `GET /v1/icp` |
+
+Local ICP admin UI (proxies `/v1` to port 8007):
+
+```bash
+cd web && npm install && npm run dev
+```
 
 Configure keys in `.env` (see `.env.example`). Missing credentials return HTTP 503. HubSpot `dry_run: true` skips CRM writes. Set `SLACK_WEBHOOK_URL` to post campaign/failure alerts to Slack (hybrid runners start real notify-service when set).
 

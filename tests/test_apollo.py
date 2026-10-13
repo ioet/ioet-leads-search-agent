@@ -75,7 +75,21 @@ def test_org_and_person_mappers_drop_sensitive() -> None:
     validated_contact = assert_json_response(contact.model_dump(), Contact)
     assert validated_contact.full_name == "Ada Lovelace"
     assert validated_contact.title == "CTO"
-    assert "email" not in validated_contact.model_dump()
+    assert validated_contact.email == "ada@acme.com"
+    assert validated_contact.phone == "555"
+
+    from_numbers = _person_to_contact(
+        {
+            "name": "Grace Hopper",
+            "title": "CEO",
+            "contact_emails": [{"email": "grace@acme.com"}],
+            "phone_numbers": [{"sanitized_number": "+1-555-0199"}],
+        },
+        ["CEO"],
+    )
+    assert from_numbers is not None
+    assert from_numbers.email == "grace@acme.com"
+    assert from_numbers.phone == "+1-555-0199"
 
 
 def test_search_companies_http_mocked(monkeypatch) -> None:
@@ -147,6 +161,7 @@ def test_find_decision_makers_request_payload(monkeypatch) -> None:
 
     payload = assert_http_call_json(
         session,
+        call_index=0,
         expected={
             "page": 1,
             "person_titles": ["CTO", "VP Engineering"],
@@ -155,8 +170,125 @@ def test_find_decision_makers_request_payload(monkeypatch) -> None:
         },
     )
     assert isinstance(payload["per_page"], int)
-    args, _ = session.post.call_args
+    args, _ = session.post.call_args_list[0]
     assert str(args[0]).endswith("/mixed_people/api_search")
+
+
+def test_find_decision_makers_uses_org_id_and_enriches(monkeypatch) -> None:
+    monkeypatch.setenv("APOLLO_API_KEY", "test-key")
+    monkeypatch.delenv("APOLLO_ENRICH_CONTACTS", raising=False)
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append((url, json))
+        resp = MagicMock()
+        resp.ok = True
+        if url.endswith("/mixed_people/api_search"):
+            if json.get("organization_ids") == ["org-123"]:
+                resp.json.return_value = {
+                    "people": [
+                        {
+                            "id": "p-1",
+                            "first_name": "Marcus",
+                            "last_name_obfuscated": "El***y",
+                            "title": "Co-Founder",
+                            "has_email": True,
+                        }
+                    ]
+                }
+            else:
+                resp.json.return_value = {"people": []}
+        elif url.endswith("/people/bulk_match"):
+            resp.json.return_value = {
+                "matches": [
+                    {
+                        "id": "p-1",
+                        "first_name": "Marcus",
+                        "last_name": "Ellery",
+                        "linkedin_url": "http://www.linkedin.com/in/marcus-ellery",
+                        "email": "marcus@acme.ai",
+                        "phone_numbers": [{"sanitized_number": "+15550100"}],
+                    }
+                ]
+            }
+        return resp
+
+    session = MagicMock()
+    session.post.side_effect = fake_post
+    company = Company(
+        name="Acme AI",
+        domain="acme.ai",
+        apollo_organization_id="org-123",
+    )
+    contacts = ApolloClient(api_key="test-key", session=session).find_decision_makers(
+        company, ["Co-Founder"], max_results=1
+    )
+
+    assert calls[0][1]["organization_ids"] == ["org-123"]
+    assert "q_organization_domains_list" not in calls[0][1]
+    assert calls[1][0].endswith("/people/bulk_match")
+    assert calls[1][1] == {"details": [{"id": "p-1"}]}
+    assert len(contacts) == 1
+    assert contacts[0].full_name == "Marcus Ellery"
+    assert contacts[0].email == "marcus@acme.ai"
+    assert contacts[0].phone == "+15550100"
+    assert contacts[0].linkedin_url == "http://www.linkedin.com/in/marcus-ellery"
+
+
+def test_find_decision_makers_falls_back_to_domain_and_skips_locked_email(monkeypatch) -> None:
+    monkeypatch.setenv("APOLLO_API_KEY", "test-key")
+    calls: list[dict] = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(json)
+        resp = MagicMock()
+        resp.ok = True
+        if url.endswith("/mixed_people/api_search"):
+            people = [{"id": "p-2", "first_name": "Ana", "title": "CTO"}]
+            resp.json.return_value = {"people": people if "q_organization_domains_list" in json else []}
+        else:
+            resp.json.return_value = {
+                "matches": [{"id": "p-2", "last_name": "Diaz", "email": "email_not_unlocked@acme.ai"}]
+            }
+        return resp
+
+    session = MagicMock()
+    session.post.side_effect = fake_post
+    company = Company(name="Acme AI", domain="acme.ai", apollo_organization_id="org-x")
+    contacts = ApolloClient(api_key="test-key", session=session).find_decision_makers(
+        company, ["CTO"], max_results=1
+    )
+
+    assert "organization_ids" in calls[0]
+    assert calls[1]["q_organization_domains_list"] == ["acme.ai"]
+    assert contacts[0].full_name == "Ana Diaz"
+    assert contacts[0].email is None
+
+
+def test_find_decision_makers_enrichment_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("APOLLO_API_KEY", "test-key")
+    monkeypatch.setenv("APOLLO_ENRICH_CONTACTS", "false")
+    session = MagicMock()
+    response = MagicMock()
+    response.ok = True
+    response.json.return_value = {"people": [{"id": "p-3", "first_name": "Lee", "title": "CEO"}]}
+    session.post.return_value = response
+
+    contacts = ApolloClient(api_key="test-key", session=session).find_decision_makers(
+        Company(name="Acme", domain="acme.ai"), ["CEO"], max_results=1
+    )
+    assert contacts[0].full_name == "Lee"
+    assert session.post.call_count == 1
+
+
+def test_org_to_company_keeps_apollo_org_id() -> None:
+    company = _org_to_company({"id": "org-9", "name": "Acme", "primary_domain": "acme.ai"}, "primary")
+    assert company.apollo_organization_id == "org-9"
+    account = _org_to_company(
+        {"id": "acct-1", "organization_id": "org-10", "name": "Beta", "domain": "beta.io"},
+        "primary",
+    )
+    assert account.apollo_organization_id == "org-10"
 
 
 def test_apollo_endpoints_require_api_key(monkeypatch) -> None:

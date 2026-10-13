@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leads Search Agent — AWS architecture</title>
+<style>
+body {
+  margin: 0;
+  padding: 32px 16px;
+  background: #f4f5f7;
+  color: #232f3e;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.page { max-width: 1040px; margin: 0 auto; }
+.vis-section-stack, .vis-column { display: flex; flex-direction: column; gap: 12px; }
+.vis-chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.vis-chart-meta-copy { display: flex; flex-direction: column; gap: 2px; }
+.vis-chart-meta-copy h3 { margin: 0; font-size: 18px; font-weight: 500; }
+.vis-chart-meta-copy span { color: #545b64; }
+.vis-legend { display: flex; flex-wrap: wrap; gap: 12px; color: #545b64; font-size: 12px; }
+.vis-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.vis-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.vis-text-small { font-size: 12px; }
+.vis-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+</style>
+</head>
+<body>
+<main class="page">
+<div id="leads-arch" class="vis-section-stack">
+<style>
+#leads-arch { container-type: inline-size; }
+#leads-arch, #leads-arch * { box-sizing: border-box; }
+#leads-arch .sheet {
+  background: #fff;
+  color: #232f3e;
+  border-radius: 8px;
+  padding: 12px 8px 16px;
+}
+#leads-arch .sheet .vis-text-small { color: #545b64; }
+#leads-arch .sw-compute { background: #ed7100; }
+#leads-arch .sw-storage { background: #3f8624; }
+#leads-arch .sw-ai { background: #01a88d; }
+#leads-arch .sw-net { background: #8c4fff; }
+#leads-arch .board {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+#leads-arch .aws-bg,
+#leads-arch .region-bg,
+#leads-arch .vpc-bg { display: none; }
+#leads-arch .aws-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  width: 100%;
+  z-index: 2;
+}
+#leads-arch .aws-logo {
+  width: 40px;
+  height: 40px;
+  background: #232f3e;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+#leads-arch .aws-logo svg { width: 40px; height: 40px; display: block; }
+#leads-arch .aws-title {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 1px solid #232f3e;
+  padding-bottom: 4px;
+  font-weight: 500;
+}
+#leads-arch .region-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: #147e6a;
+  font-weight: 500;
+  z-index: 2;
+}
+#leads-arch .flag {
+  width: 26px;
+  height: 26px;
+  background: #147e6a;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+#leads-arch .flag svg { width: 16px; height: 16px; display: block; }
+#leads-arch .lh {
+  width: 100%;
+  max-width: 280px;
+  border: 1.5px solid #545b64;
+  border-radius: 4px;
+  padding: 10px;
+  background: #fff;
+  z-index: 2;
+}
+#leads-arch .lh-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+#leads-arch .wf-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#leads-arch .wf-list li {
+  padding-left: 12px;
+  position: relative;
+}
+#leads-arch .wf-list li::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  background: #545b64;
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+}
+#leads-arch .vpc-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #8c4fff;
+  font-weight: 500;
+  z-index: 2;
+}
+#leads-arch .vpc-label svg { width: 16px; height: 16px; display: block; }
+#leads-arch .stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  z-index: 2;
+  background: transparent;
+}
+#leads-arch .stack-title {
+  font-weight: 500;
+  text-align: center;
+  white-space: nowrap;
+}
+#leads-arch .sub {
+  text-align: center;
+  white-space: nowrap;
+}
+#leads-arch .tile {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+#leads-arch .tile svg { width: 30px; height: 30px; display: block; }
+#leads-arch .tile-compute { background: #ed7100; }
+#leads-arch .tile-storage { background: #3f8624; }
+#leads-arch .tile-ai { background: #01a88d; }
+#leads-arch .tile-lh { background: #232f3e; }
+#leads-arch .tile-bamboo { background: #5c9e1a; }
+#leads-arch .tile-hubspot { background: #ff7a59; }
+#leads-arch .tile-web { background: #0a66c2; }
+#leads-arch .tile-apollo { background: #111827; }
+#leads-arch .tile-slack { background: #4a154b; }
+#leads-arch .wires {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+#leads-arch #leads-arch-lines path {
+  fill: none;
+  stroke: #545b64;
+  stroke-width: 1.5px;
+}
+@container (min-width: 700px) {
+  #leads-arch .board {
+    display: grid;
+    width: max-content;
+    max-width: 100%;
+    margin-inline: auto;
+    column-gap: 10px;
+    row-gap: 0;
+    align-items: stretch;
+    justify-content: center;
+    grid-template-columns: 156px 116px max-content max-content max-content;
+    grid-template-rows: 52px 34px repeat(7, 86px) 16px;
+  }
+  #leads-arch .aws-bg,
+  #leads-arch .region-bg,
+  #leads-arch .vpc-bg {
+    display: block;
+    position: relative;
+    z-index: 0;
+    pointer-events: none;
+    min-width: 0;
+    min-height: 0;
+  }
+  #leads-arch .aws-bg {
+    grid-column: 2 / 5;
+    grid-row: 1 / 11;
+    border: 2px solid #232f3e;
+    background: #fff;
+  }
+  #leads-arch .region-bg {
+    grid-column: 2 / 5;
+    grid-row: 2 / 11;
+    margin: 0 8px 8px 8px;
+    border: 2px dashed #147e6a;
+  }
+  #leads-arch .vpc-bg {
+    grid-column: 2;
+    grid-row: 3 / 11;
+    margin: 8px 4px 10px 14px;
+    border: 1.5px solid #8c4fff;
+  }
+  #leads-arch .pos-head { grid-column: 2 / 5; grid-row: 1; padding: 6px 12px 0 8px; width: auto; }
+  #leads-arch .pos-region { grid-column: 2 / 5; grid-row: 2; padding-left: 16px; align-self: center; }
+  #leads-arch .pos-lh { grid-column: 1; grid-row: 3 / span 7; align-self: center; width: 156px; max-width: none; }
+  #leads-arch .pos-vpclabel { grid-column: 2; grid-row: 3; align-self: start; justify-self: start; margin: 14px 0 0 22px; }
+  #leads-arch .pos-ecs { grid-column: 2; grid-row: 3 / span 7; align-self: center; justify-self: center; }
+  #leads-arch .pos-skills { grid-column: 3; grid-row: 3; align-self: center; justify-self: center; }
+  #leads-arch .pos-hub { grid-column: 3; grid-row: 4; align-self: center; justify-self: center; }
+  #leads-arch .pos-jobs { grid-column: 3; grid-row: 5; align-self: center; justify-self: center; }
+  #leads-arch .pos-apollo { grid-column: 3; grid-row: 6; align-self: center; justify-self: center; }
+  #leads-arch .pos-notify { grid-column: 3; grid-row: 7; align-self: center; justify-self: center; }
+  #leads-arch .pos-icp { grid-column: 3; grid-row: 8; align-self: center; justify-self: center; }
+  #leads-arch .pos-agent { grid-column: 3; grid-row: 9; align-self: center; justify-self: center; }
+  #leads-arch .pos-s3 { grid-column: 4; grid-row: 8; align-self: center; justify-self: center; margin-right: 16px; }
+  #leads-arch .pos-bedrock { grid-column: 4; grid-row: 9; align-self: center; justify-self: center; margin-right: 16px; }
+  #leads-arch .pos-bamboo { grid-column: 5; grid-row: 3; align-self: center; justify-self: center; }
+  #leads-arch .pos-hsext { grid-column: 5; grid-row: 4; align-self: center; justify-self: center; }
+  #leads-arch .pos-web { grid-column: 5; grid-row: 5; align-self: center; justify-self: center; }
+  #leads-arch .pos-apext { grid-column: 5; grid-row: 6; align-self: center; justify-self: center; }
+  #leads-arch .pos-slack { grid-column: 5; grid-row: 7; align-self: center; justify-self: center; }
+}
+</style>
+<div class="vis-column">
+<div class="vis-chart-meta">
+<div class="vis-chart-meta-copy">
+<h3>Leads search architecture</h3>
+<span>AWS, LittleHorse, and SaaS</span>
+</div>
+<div class="vis-legend">
+<span class="vis-legend-item"><span class="vis-swatch sw-compute"></span>Compute</span>
+<span class="vis-legend-item"><span class="vis-swatch sw-storage"></span>Storage</span>
+<span class="vis-legend-item"><span class="vis-swatch sw-ai"></span>AI</span>
+<span class="vis-legend-item"><span class="vis-swatch sw-net"></span>Network</span>
+</div>
+</div>
+<p class="vis-sr-only">LittleHorse Cloud runs leads-search-workflow and enrich-and-publish-lead. ECS task workers in a VPC poll LittleHorse and call seven Lambda functions. skills calls BambooHR, hubspot calls HubSpot, jobs reads LinkedIn and company websites, apollo calls Apollo, notify calls Slack, icp reads the ICP object in S3, and agent calls Amazon Bedrock.</p>
+<div class="sheet">
+<div class="board">
+<div class="aws-bg"><span class="vis-sr-only">AWS Cloud boundary</span></div>
+<div class="region-bg"><span class="vis-sr-only">Region boundary</span></div>
+<div class="vpc-bg"><span class="vis-sr-only">VPC boundary</span></div>
+<div class="aws-head pos-head">
+<div class="aws-logo" aria-hidden="true">
+<svg viewBox="0 0 40 40"><rect width="40" height="40" fill="#232F3E"/><path d="M7 17c5 9 18 10 26 1" fill="none" stroke="#FF9900" stroke-width="2.4" stroke-linecap="round"/><path d="M29 14.5 36 18.2 28.5 21.2z" fill="#FF9900"/></svg>
+</div>
+<div class="aws-title"><span class="aws-name">AWS Cloud</span></div>
+</div>
+<div class="region-label pos-region">
+<span class="flag" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3v18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M6 4h12l-3 4 3 4H6z" fill="#fff"/></svg></span>
+<span>Region</span>
+</div>
+<article class="lh pos-lh" id="lh">
+<div class="lh-title">
+<span class="tile tile-lh" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><text x="24" y="30" text-anchor="middle" fill="#fff" font-size="16" font-family="sans-serif">LH</text></svg>
+</span>
+<span>LittleHorse Cloud</span>
+</div>
+<ul class="wf-list">
+<li>leads-search-<wbr>workflow</li>
+<li>enrich-and-<wbr>publish-lead</li>
+</ul>
+</article>
+<div class="vpc-label pos-vpclabel">
+<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 20 6.5V12c0 5-3.5 8-8 9.5C7.5 20 4 17 4 12V6.5Z" fill="none" stroke="#8C4FFF" stroke-width="1.7"/></svg>
+<span>VPC</span>
+</div>
+<div class="stack pos-ecs" id="ecs">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="5" y="24" width="16" height="16" rx="2" fill="none" stroke="#fff" stroke-width="2.4"/><rect x="16" y="7" width="16" height="16" rx="2" fill="none" stroke="#fff" stroke-width="2.4"/><rect x="27" y="22" width="16" height="16" rx="2" fill="none" stroke="#fff" stroke-width="2.4"/></svg>
+</span>
+<span class="stack-title">Amazon ECS</span>
+<span class="vis-text-small sub">Task workers</span>
+</div>
+<div class="stack pos-skills" id="fn-skills">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">skills</span>
+</div>
+<div class="stack pos-hub" id="fn-hubspot">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">hubspot</span>
+</div>
+<div class="stack pos-jobs" id="fn-jobs">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">jobs</span>
+</div>
+<div class="stack pos-apollo" id="fn-apollo">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">apollo</span>
+</div>
+<div class="stack pos-notify" id="fn-notify">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">notify</span>
+</div>
+<div class="stack pos-icp" id="fn-icp">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">icp</span>
+</div>
+<div class="stack pos-agent" id="fn-agent">
+<span class="tile tile-compute" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M34 7 13 41" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M19 23 41 42" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">AWS Lambda</span>
+<span class="vis-text-small sub">agent</span>
+</div>
+<div class="stack pos-s3" id="s3">
+<span class="tile tile-storage" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><ellipse cx="24" cy="13" rx="14" ry="5" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M10 13v17c0 4 6 7 14 7s14-3 14-7V13" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M10 21c3 3 8 4.5 14 4.5S35 24 38 21" fill="none" stroke="#fff" stroke-width="2"/><path d="M10 28c3 3 8 4.5 14 4.5S35 31 38 28" fill="none" stroke="#fff" stroke-width="2"/></svg>
+</span>
+<span class="stack-title">Amazon S3</span>
+<span class="vis-text-small sub">ICP</span>
+</div>
+<div class="stack pos-bedrock" id="bedrock">
+<span class="tile tile-ai" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="m24 6 18 10-18 10L6 16z" fill="#fff"/><path d="M8 28 24 37 40 28v5L24 42 8 33z" fill="#fff"/></svg>
+</span>
+<span class="stack-title">Amazon Bedrock</span>
+<span class="vis-text-small sub">AI model</span>
+</div>
+<div class="stack pos-bamboo" id="ext-bamboo">
+<span class="tile tile-bamboo" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M18 40V10M30 40V14" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M18 16h8M18 24h8M30 20h7M30 28h7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+</span>
+<span class="stack-title">BambooHR</span>
+<span class="vis-text-small sub">Skills</span>
+</div>
+<div class="stack pos-hsext" id="ext-hubspot">
+<span class="tile tile-hubspot" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="6" fill="none" stroke="#fff" stroke-width="2.4"/><circle cx="24" cy="8" r="3" fill="#fff"/><circle cx="24" cy="40" r="3" fill="#fff"/><circle cx="8" cy="24" r="3" fill="#fff"/><circle cx="40" cy="24" r="3" fill="#fff"/><path d="M24 11v6M24 31v6M11 24h6M31 24h6" fill="none" stroke="#fff" stroke-width="2"/></svg>
+</span>
+<span class="stack-title">HubSpot</span>
+<span class="vis-text-small sub">CRM</span>
+</div>
+<div class="stack pos-web" id="ext-web">
+<span class="tile tile-web" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="14" fill="none" stroke="#fff" stroke-width="2.4"/><ellipse cx="24" cy="24" rx="6" ry="14" fill="none" stroke="#fff" stroke-width="2"/><path d="M10 24h28M12 16h24M12 32h24" fill="none" stroke="#fff" stroke-width="2"/></svg>
+</span>
+<span class="stack-title">Web</span>
+<span class="vis-text-small sub">LinkedIn, sites</span>
+</div>
+<div class="stack pos-apext" id="ext-apollo">
+<span class="tile tile-apollo" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="4" fill="#fff"/><ellipse cx="24" cy="24" rx="16" ry="7" fill="none" stroke="#fff" stroke-width="2" transform="rotate(-24 24 24)"/><ellipse cx="24" cy="24" rx="16" ry="7" fill="none" stroke="#fff" stroke-width="2" transform="rotate(48 24 24)"/></svg>
+</span>
+<span class="stack-title">Apollo</span>
+<span class="vis-text-small sub">Companies, contacts</span>
+</div>
+<div class="stack pos-slack" id="ext-slack">
+<span class="tile tile-slack" data-anchor>
+<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M20 8a4 4 0 0 0-4 4v4h4a4 4 0 0 0 0-8zM28 20a4 4 0 0 0 4-4V8h-4a4 4 0 0 0 0 8zM40 20a4 4 0 0 0-4 4v4h4a4 4 0 0 0 0-8zM28 28a4 4 0 0 0-4 4v4h4a4 4 0 0 0 0-8zM8 28a4 4 0 0 0 4-4v-4H8a4 4 0 0 0 0 8zM20 28a4 4 0 0 0 4-4v-4h-4a4 4 0 0 0 0 8z" fill="#fff"/></svg>
+</span>
+<span class="stack-title">Slack</span>
+<span class="vis-text-small sub">Notify</span>
+</div>
+<svg class="wires" aria-hidden="true">
+<defs>
+<marker id="leads-arch-arrow" viewBox="0 0 10 8" markerWidth="8" markerHeight="6" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+<path d="M0 0 10 4 0 8Z" fill="#545B64" stroke="none"></path>
+</marker>
+<marker id="leads-arch-arrow-start" viewBox="0 0 10 8" markerWidth="8" markerHeight="6" refX="1" refY="4" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+<path d="M0 0 10 4 0 8Z" fill="#545B64" stroke="none"></path>
+</marker>
+</defs>
+<g id="leads-arch-lines"></g>
+</svg>
+</div>
+</div>
+</div>
+<script>
+(function () {
+  var root = document.getElementById("leads-arch");
+  var board = root.querySelector(".board");
+  var svg = root.querySelector(".wires");
+  var lines = root.querySelector("#leads-arch-lines");
+  var vpc = root.querySelector(".vpc-bg");
+  var busIds = ["fn-skills", "fn-hubspot", "fn-jobs", "fn-apollo", "fn-notify", "fn-icp", "fn-agent"];
+  var pairs = [
+    ["fn-skills", "ext-bamboo"],
+    ["fn-hubspot", "ext-hubspot"],
+    ["fn-jobs", "ext-web"],
+    ["fn-apollo", "ext-apollo"],
+    ["fn-notify", "ext-slack"],
+    ["fn-icp", "s3"],
+    ["fn-agent", "bedrock"]
+  ];
+
+  function n(v) {
+    return Math.round(v * 10) / 10;
+  }
+
+  function box(el) {
+    var r = el.getBoundingClientRect();
+    var b = board.getBoundingClientRect();
+    return {
+      left: r.left - b.left,
+      right: r.right - b.left,
+      top: r.top - b.top,
+      bottom: r.bottom - b.top,
+      cx: r.left - b.left + r.width / 2,
+      cy: r.top - b.top + r.height / 2
+    };
+  }
+
+  function parts(id) {
+    var el = root.querySelector("#" + id);
+    var tile = el.querySelector("[data-anchor]");
+    return { host: box(el), tile: box(tile || el) };
+  }
+
+  function add(d, both) {
+    var p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", d);
+    p.setAttribute("vector-effect", "non-scaling-stroke");
+    p.setAttribute("marker-end", "url(#leads-arch-arrow)");
+    if (both) p.setAttribute("marker-start", "url(#leads-arch-arrow-start)");
+    lines.appendChild(p);
+  }
+
+  function isWide() {
+    return getComputedStyle(vpc).display !== "none";
+  }
+
+  function draw() {
+    var b = board.getBoundingClientRect();
+    var w = Math.round(b.width);
+    var h = Math.round(b.height);
+    if (w < 2 || h < 2) return;
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+    svg.setAttribute("width", String(w));
+    svg.setAttribute("height", String(h));
+    lines.replaceChildren();
+    var ecs = parts("ecs");
+    var lh = parts("lh");
+    if (isWide()) {
+      var vpcBox = box(vpc);
+      var awsBox = box(root.querySelector(".aws-bg"));
+      var spineX = n(vpcBox.right + 6);
+      var gutter = n(lh.host.right + Math.max(4, (awsBox.left - lh.host.right) / 2));
+      var yStart = n(lh.host.cy);
+      var yEnd = n(ecs.tile.cy);
+      if (Math.abs(yStart - yEnd) < 8) {
+        add("M " + n(lh.host.right) + " " + yEnd + " H " + n(ecs.tile.left), true);
+      } else {
+        add("M " + n(lh.host.right) + " " + yStart + " H " + gutter + " V " + yEnd + " H " + n(ecs.tile.left), true);
+      }
+      busIds.forEach(function (id) {
+        var target = parts(id);
+        var y = n(target.tile.cy);
+        var end = n(target.tile.left);
+        if (spineX < end - 4) {
+          add("M " + n(ecs.tile.right) + " " + n(ecs.tile.cy) + " H " + spineX + " V " + y + " H " + end, false);
+        }
+      });
+    } else {
+      add("M " + n(lh.host.cx) + " " + n(lh.host.bottom) + " V " + n(ecs.host.top), true);
+      add("M " + n(ecs.host.cx) + " " + n(ecs.host.bottom) + " V " + n(parts("fn-skills").host.top), false);
+    }
+    pairs.forEach(function (pair) {
+      var from = parts(pair[0]);
+      var to = parts(pair[1]);
+      var x1 = n(from.tile.right);
+      var y1 = n(from.tile.cy);
+      var x2 = n(to.tile.left);
+      var y2 = n(to.tile.cy);
+      if (x2 > x1 + 6 && Math.abs(y1 - y2) < 10) {
+        add("M " + x1 + " " + y1 + " H " + x2, false);
+      } else if (to.host.top >= from.host.bottom - 2) {
+        add("M " + n(from.tile.cx) + " " + n(from.host.bottom) + " V " + n(to.host.top), false);
+      } else if (x2 > x1 + 6) {
+        var mid = n(x1 + (x2 - x1) / 2);
+        add("M " + x1 + " " + y1 + " H " + mid + " V " + y2 + " H " + x2, false);
+      }
+    });
+  }
+
+  var observer = new ResizeObserver(draw);
+  observer.observe(board);
+  draw();
+})();
+</script>
+</div>
+</main>
+</body>
+</html>

@@ -92,3 +92,17 @@ services:
       - AWS_BEDROCK_MODEL_ID_LOW=${AWS_BEDROCK_MODEL_ID_LOW:-google.gemma-3-4b-it}
       - JOB_POSTING_SOURCES=${JOB_POSTING_SOURCES:-linkedin,company_website}
       - LINKEDIN_JOBS_ACCESS_TOKEN=${LINKEDIN_JOBS_ACCESS_TOKEN:-}
+
+  icp:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.icp.app:app --host 0.0.0.0 --port 8007 --reload
+    ports:
+      - "8007:8007"
+    volumes:
+      - .:/app
+    environment:
+      - AWS_BEDROCK_API_KEY=${AWS_BEDROCK_API_KEY:-}
+      - AWS_BEDROCK_REGION=${AWS_BEDROCK_REGION:-us-east-1}
+      - AWS_BEDROCK_MODEL_ID_HIGH=${AWS_BEDROCK_MODEL_ID_HIGH:-google.gemma-3-27b-it}

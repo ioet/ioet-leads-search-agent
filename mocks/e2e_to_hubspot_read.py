@@ -70,19 +70,22 @@ def try_match_and_draft(lead: dict, catalog: list) -> dict:
         return post(AGENT, "/v1/draft-outreach-email", {"lead": matched})
     except (requests.HTTPError, requests.ConnectionError) as exc:
         print(f"Bedrock match/draft unavailable ({exc}); stubbing outreach")
-        contact = (lead.get("contacts") or [{}])[0]
-        name = contact.get("full_name") or "there"
+        contacts = [dict(row) for row in (lead.get("contacts") or [])]
+        contact = contacts[0] if contacts else {}
+        name = (contact.get("full_name") or "").split()[0] or "there"
         company = (lead.get("company") or {}).get("name") or "your team"
+        if contacts:
+            contacts[0]["notes"] = (
+                f"Subject: Quick intro — ioet x {company}\n\n"
+                f"Hi {name},\n\n"
+                "Stubbed outreach email for HubSpot dry-run (Bedrock blocked).\n"
+            )
         lead = dict(lead)
+        lead["contacts"] = contacts
         lead["skill_matches"] = [
             {"skill": "Python", "person_or_team": "Engineering", "confidence": 0.8}
         ]
         lead["status"] = "matched"
-        lead["notes"] = (
-            f"Subject: Quick intro — ioet x {company}\n\n"
-            f"Hi {name},\n\n"
-            "Stubbed outreach email for HubSpot dry-run (Bedrock blocked).\n"
-        )
         return lead
 
 
