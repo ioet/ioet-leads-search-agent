@@ -213,6 +213,7 @@ def test_match_ioet_skills_uses_catalog() -> None:
     assert match.person_or_team == "Grace Hopper"
     assert match.confidence == 0.88
     assert isinstance(match.confidence, float)
+    assert bedrock.converse_json.call_args.kwargs["allow_repair"] is False
 
     user_arg = bedrock.converse_json.call_args[0][1]
     assert "Grace Hopper" in user_arg

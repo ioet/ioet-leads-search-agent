@@ -29,9 +29,11 @@ class WorkflowRunInput(BaseModel):
 
 
 class CompanySearchRequest(BaseModel):
-    icp_version: str
+    icp_version: str | None = None
+    icp_ref: str | None = None
     segment_ids: list[str]
     max_results: int = Field(default_factory=lambda: max_companies(25), ge=1, le=500)
+    campaign_config: dict[str, Any] | None = None
 
 
 class Company(BaseModel):

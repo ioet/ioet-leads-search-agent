@@ -147,6 +147,43 @@ def test_company_website_drops_script_and_js_junk() -> None:
     assert postings == []
 
 
+def test_extract_job_skills_skips_when_required_signal_misses() -> None:
+    register_source("_test_miss", lambda: _StubSource("_test_miss", []))
+    with patch.dict("os.environ", {"JOB_POSTING_SOURCES": "linkedin,company_website"}):
+        result = extract_job_skills(
+            _sample_lead(),
+            campaign_config={
+                "hiring_signal_config": {
+                    "mode": "required",
+                    "sources": ["_test_miss", "apollo"],
+                    "job_keywords": ["serverless"],
+                    "min_open_eng_roles": 1,
+                }
+            },
+        )
+    assert result.status == LeadStatus.SKIPPED
+    assert result.job_context is not None
+    assert "hiring signal required" in (result.job_context.note or "")
+
+
+def test_extract_job_skills_drops_directory_skill_list() -> None:
+    posting = JobPosting(
+        title="Backend Engineer",
+        source="company_website",
+        description="Build Python services.",
+        url="https://acme.com/jobs/1",
+    )
+    register_source("_test_dump", lambda: _StubSource("_test_dump", [posting]))
+    bedrock = MagicMock()
+    bedrock.converse_json.return_value = {
+        "required_skills": [f"Skill {i}" for i in range(25)] + ["Python"]
+    }
+    with patch.dict("os.environ", {"JOB_POSTING_SOURCES": "_test_dump"}):
+        result = extract_job_skills(_sample_lead(), bedrock=bedrock)
+    assert result.job_context is not None
+    assert result.job_context.required_skills == []
+
+
 def test_company_website_keeps_real_job_copy() -> None:
     from services.jobs.sources.company_website import CompanyWebsiteJobPostingSource
 

@@ -43,6 +43,7 @@ Do **not** put `LHC_API_HOST` in GitHub secrets — it lives in Secrets Manager 
 ./scripts/apply_infra.sh             # terraform + images + ICP (needs terraform.tfvars)
 ./scripts/build_and_push.sh          # :latest to ECR
 ./scripts/refresh_runtime.sh         # Lambda UpdateFunctionCode @digest + ECS force deploy
-./scripts/register_lh.sh             # host + OAuth from Secrets Manager
+./scripts/register_lh.sh             # prod: host + OAuth from Secrets Manager
+./scripts/register_lh.sh --local     # local docker-compose LH (localhost:2023 PLAINTEXT)
 ./scripts/deploy_web.sh              # build React SPA → CloudFront origin
 ```

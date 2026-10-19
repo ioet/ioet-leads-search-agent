@@ -16,7 +16,9 @@ from services.agent.prompts import (
     score_companies_user,
 )
 from services.agent.skills_source import SkillsCatalogError, fetch_skills_catalog
-from services.common.icp import IdealCustomerProfile, load_icp
+from services.common.campaign_config import EmailDraftConfig
+from services.common.icp import IdealCustomerProfile
+from services.common.icp_ref import load_icp_for_request
 from services.common.schemas import Company, LeadResult, LeadStatus, SkillMatch
 
 logger = logging.getLogger(__name__)
@@ -117,14 +119,54 @@ def match_ioet_skills(
         return lead.model_copy(update={"skill_matches": [], "status": LeadStatus.MATCHED})
 
     client = bedrock or BedrockClient(model_id=model_id, complexity="low")
-    raw = client.converse_json(
-        match_skills_system(),
-        match_skills_user(lead, usable),
-    )
-    matches = _parse_skill_matches(raw)
+    try:
+        raw = client.converse_json(
+            match_skills_system(),
+            match_skills_user(lead, usable),
+            allow_repair=False,
+        )
+    except BedrockResponseError as exc:
+        logger.warning("Rejecting unparseable skill match for %s: %s", lead.company.name, exc)
+        note = "Skill match was discarded because the model response was truncated."
+        return lead.model_copy(
+            update={"skill_matches": [], "notes": _merge_lead_notes(lead.notes, note)}
+        )
+    parsed = _parse_skill_matches(raw)
+    matches = _plausible_matches(parsed)
+    if parsed and not matches:
+        note = "Skill match was discarded because one person was attached to most of the list."
+        return lead.model_copy(
+            update={"skill_matches": [], "notes": _merge_lead_notes(lead.notes, note)}
+        )
     return lead.model_copy(
         update={"skill_matches": matches, "status": LeadStatus.MATCHED},
     )
+
+
+def _merge_lead_notes(existing: str | None, addition: str) -> str:
+    if existing and existing.strip():
+        return f"{existing.strip()}\n\n{addition.strip()}"
+    return addition.strip()
+
+
+def _plausible_matches(matches: list[SkillMatch]) -> list[SkillMatch]:
+    """Cap the list and drop a match-all assignment to a single person."""
+    capped = matches[:8]
+    if not capped:
+        return []
+    counts: dict[str, int] = {}
+    for match in capped:
+        key = match.person_or_team.strip().lower()
+        counts[key] = counts.get(key, 0) + 1
+    top = max(counts.values())
+    if top >= 6 or (len(capped) >= 4 and top / len(capped) >= 0.6):
+        logger.warning(
+            "Rejecting %d skill matches; %d belong to one person",
+            len(capped),
+            top,
+        )
+        return []
+    return capped
 
 
 _GENERIC_GREETING = re.compile(
@@ -182,12 +224,13 @@ def draft_outreach_email(
     lead: LeadResult,
     bedrock: BedrockClient | None = None,
     model_id: str | None = None,
+    email_config: EmailDraftConfig | None = None,
 ) -> str:
     """Draft a customer-centric outreach email for the primary contact."""
     client = bedrock or BedrockClient(model_id=model_id, complexity="high")
     raw = client.converse_json(
         draft_outreach_email_system(),
-        draft_outreach_email_user(lead),
+        draft_outreach_email_user(lead, email_config=email_config),
     )
     email = _format_outreach_email(raw)
     contact_name = lead.contacts[0].full_name if lead.contacts else None
@@ -198,15 +241,17 @@ def draft_crm_note(
     lead: LeadResult,
     bedrock: BedrockClient | None = None,
     model_id: str | None = None,
+    email_config: EmailDraftConfig | None = None,
 ) -> str:
     """Backward-compatible alias — drafts the HubSpot outreach email."""
-    return draft_outreach_email(lead, bedrock=bedrock, model_id=model_id)
+    return draft_outreach_email(
+        lead, bedrock=bedrock, model_id=model_id, email_config=email_config
+    )
 
 
-def load_icp_for_version(icp_version: str) -> IdealCustomerProfile:
-    icp = load_icp()
-    if icp_version != icp.version:
-        raise ValueError(
-            f"Unknown icp_version {icp_version!r}; loaded canonical {icp.version!r}"
-        )
-    return icp
+def load_icp_for_version(
+    icp_version: str | None = None,
+    *,
+    icp_ref: str | None = None,
+) -> IdealCustomerProfile:
+    return load_icp_for_request(icp_ref=icp_ref, icp_version=icp_version)

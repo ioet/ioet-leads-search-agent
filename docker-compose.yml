@@ -106,3 +106,41 @@ services:
       - AWS_BEDROCK_API_KEY=${AWS_BEDROCK_API_KEY:-}
       - AWS_BEDROCK_REGION=${AWS_BEDROCK_REGION:-us-east-1}
       - AWS_BEDROCK_MODEL_ID_HIGH=${AWS_BEDROCK_MODEL_ID_HIGH:-google.gemma-3-27b-it}
+
+  dynamodb:
+    image: amazon/dynamodb-local:2.5.2
+    container_name: leads-dynamodb-local
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports:
+      - "8000:8000"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn services.api.app:app --host 0.0.0.0 --port 8010 --reload
+    ports:
+      - "8010:8010"
+    volumes:
+      - .:/app
+    environment:
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - DYNAMODB_ENDPOINT_URL=http://dynamodb:8000
+      - API_ENSURE_TABLES=true
+      - API_JWT_SECRET=${API_JWT_SECRET:-local-dev-jwt-secret-change-me}
+      - API_EMAIL_MODE=${API_EMAIL_MODE:-log}
+      - API_PUBLIC_BASE_URL=${API_PUBLIC_BASE_URL:-http://localhost:5173}
+      - API_ALLOWED_EMAIL_DOMAIN=${API_ALLOWED_EMAIL_DOMAIN:-ioet.com}
+      - API_COOKIE_SECURE=${API_COOKIE_SECURE:-false}
+      - API_CORS_ORIGINS=${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      - API_INTERNAL_SERVICE_TOKEN=${API_INTERNAL_SERVICE_TOKEN:-local-internal-token-change-me}
+      - CAMPAIGN_API_BASE_URL=${CAMPAIGN_API_BASE_URL:-http://api:8010}
+      # .env uses localhost (host machine). Inside this container that is not LH.
+      - LHC_API_HOST=littlehorse
+      - LHC_API_PORT=2023
+      - LHC_API_PROTOCOL=PLAINTEXT
+    depends_on:
+      - dynamodb
+      - littlehorse

@@ -22,10 +22,17 @@ def register_source(source_id: str, factory: type[JobPostingSource]) -> None:
     _SOURCE_FACTORIES[source_id] = factory
 
 
-def get_enabled_sources() -> list[JobPostingSource]:
-    """Instantiate sources listed in ``JOB_POSTING_SOURCES`` (comma-separated)."""
-    raw = os.environ.get("JOB_POSTING_SOURCES", "linkedin,company_website")
-    ids = [part.strip() for part in raw.split(",") if part.strip()]
+def get_enabled_sources(source_ids: list[str] | None = None) -> list[JobPostingSource]:
+    """Instantiate job sources.
+
+    ``source_ids`` comes from the campaign hiring signal. When omitted, fall back
+    to ``JOB_POSTING_SOURCES``.
+    """
+    if source_ids is None:
+        raw = os.environ.get("JOB_POSTING_SOURCES", "linkedin,company_website")
+        ids = [part.strip() for part in raw.split(",") if part.strip()]
+    else:
+        ids = [part.strip() for part in source_ids if part and part.strip()]
     sources: list[JobPostingSource] = []
     for source_id in ids:
         factory = _SOURCE_FACTORIES.get(source_id)

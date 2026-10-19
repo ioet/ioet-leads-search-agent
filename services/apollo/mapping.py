@@ -77,7 +77,13 @@ def industry_keywords(industries: list[str]) -> list[str]:
     return keywords
 
 
-def segment_to_apollo_org_search(segment: Segment, page: int = 1, per_page: int = 25) -> dict[str, Any]:
+def segment_to_apollo_org_search(
+    segment: Segment,
+    page: int = 1,
+    per_page: int = 25,
+    *,
+    company_filter: Any | None = None,
+) -> dict[str, Any]:
     filters = apollo_hard_filters(segment)
     payload: dict[str, Any] = {
         "page": page,
@@ -110,5 +116,10 @@ def segment_to_apollo_org_search(segment: Segment, page: int = 1, per_page: int 
     ]
     if funding:
         payload["organization_latest_funding_stage_cd"] = funding
+
+    if company_filter is not None:
+        from services.common.campaign_config import apply_company_filter_to_apollo_payload
+
+        payload = apply_company_filter_to_apollo_payload(payload, company_filter)
 
     return payload

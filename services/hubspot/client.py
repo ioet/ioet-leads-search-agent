@@ -10,10 +10,12 @@ from typing import Any
 
 import requests
 
+from services.common.campaign_config import HubspotOutputConfig
 from services.common.icp import load_icp
+from services.common.icp_ref import load_icp_for_request
 from services.common.linkedin import linkedin_url_search_variants, normalize_linkedin_url
 from services.common.sanitize import hubspot_payload_from_lead, sanitize_lead
-from services.common.schemas import LeadResult, LeadStatus
+from services.common.schemas import Company, LeadResult, LeadStatus
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +67,74 @@ class HubSpotClient:
             return {}
         return response.json()
 
-    def upsert_lead(self, lead: LeadResult, *, dry_run: bool = False) -> LeadResult:
+    def company_signals(self, company: Company) -> dict[str, Any]:
+        """Best-effort CRM signals for pre-filtering. Missing scopes → warnings, not errors."""
+        signals: dict[str, Any] = {
+            "domain": company.domain,
+            "exists": False,
+            "hubspot_company_id": None,
+            "lifecycle_stage": None,
+            "has_owner": None,
+            "notes_last_contacted": None,
+            "has_open_deal": None,
+            "warnings": [],
+        }
+        if not company.domain:
+            signals["warnings"].append("no_domain")
+            return signals
+
+        try:
+            company_id = self._search_company_by_domain(company.domain)
+        except Exception as exc:  # noqa: BLE001
+            signals["warnings"].append(f"company_search_failed:{exc}")
+            return signals
+
+        if not company_id:
+            return signals
+
+        signals["exists"] = True
+        signals["hubspot_company_id"] = company_id
+        try:
+            data = self._request(
+                "GET",
+                f"/crm/v3/objects/companies/{company_id}"
+                "?properties=lifecyclestage,hubspot_owner_id,notes_last_contacted",
+            )
+            props = data.get("properties") or {}
+            signals["lifecycle_stage"] = props.get("lifecyclestage")
+            owner = props.get("hubspot_owner_id")
+            signals["has_owner"] = bool(owner)
+            signals["notes_last_contacted"] = props.get("notes_last_contacted")
+        except Exception as exc:  # noqa: BLE001
+            signals["warnings"].append(f"company_props_failed:{exc}")
+
+        try:
+            deals = self._request(
+                "GET",
+                f"/crm/v4/objects/companies/{company_id}/associations/deals",
+            )
+            results = deals.get("results") or []
+            signals["has_open_deal"] = bool(results)
+        except Exception as exc:  # noqa: BLE001
+            signals["warnings"].append(f"deals_lookup_failed:{exc}")
+            signals["has_open_deal"] = None
+
+        return signals
+
+    def upsert_lead(
+        self,
+        lead: LeadResult,
+        *,
+        dry_run: bool = False,
+        output_config: HubspotOutputConfig | None = None,
+        icp_ref: str | None = None,
+    ) -> LeadResult:
         clean = sanitize_lead(lead)
-        policy = load_icp().data_policy
+        out = output_config or HubspotOutputConfig()
+        try:
+            policy = load_icp_for_request(icp_ref=icp_ref).data_policy
+        except Exception:
+            policy = load_icp().data_policy
         payload = hubspot_payload_from_lead(clean, policy)
 
         if dry_run:
@@ -88,12 +155,25 @@ class HubSpotClient:
                 update={"hubspot_ids": ids, "status": LeadStatus.PUBLISHED}
             )
 
-        company_id = self._upsert_company(payload.get("company") or {})
+        company_props = payload.get("company") or {}
+        if out.lifecycle_stage:
+            company_props = {**company_props, "lifecyclestage": out.lifecycle_stage}
+
+        company_id, company_created = self._upsert_company(
+            company_props,
+            if_exists=out.if_company_exists,
+        )
         ids: dict[str, str] = {"company": company_id}
 
         for idx, contact in enumerate(payload.get("contacts") or []):
             contact_note = contact.get("note")
-            contact_id = self._upsert_contact(contact, company_id)
+            if out.lead_status:
+                contact = {**contact, "hs_lead_status": out.lead_status}
+            contact_id = self._upsert_contact(
+                contact,
+                company_id,
+                if_exists=out.if_contact_exists,
+            )
             if contact_id:
                 ids[f"contact_{idx}"] = contact_id
             if contact_id and contact_note:
@@ -101,13 +181,22 @@ class HubSpotClient:
                 ids[f"contact_note_{idx}"] = note_id
 
         company_note = payload.get("company_note")
-        if company_note:
+        # Always allow job/company notes; "add_job_note_only" still writes notes on existing companies.
+        if company_note and (company_created or out.if_company_exists in {
+            "add_job_note_only",
+            "update",
+        }):
             note_id = self._create_note(str(company_note), company_id=company_id)
             ids["note"] = note_id
 
         return clean.model_copy(update={"hubspot_ids": ids, "status": LeadStatus.PUBLISHED})
 
-    def _upsert_company(self, props: dict[str, Any]) -> str:
+    def _upsert_company(
+        self,
+        props: dict[str, Any],
+        *,
+        if_exists: str = "update",
+    ) -> tuple[str, bool]:
         domain = props.get("domain")
         name = props.get("name")
         if not name and not domain:
@@ -120,6 +209,8 @@ class HubSpotClient:
             hs_props["domain"] = domain
         if props.get("industry"):
             hs_props["industry"] = props["industry"]
+        if props.get("lifecyclestage"):
+            hs_props["lifecyclestage"] = props["lifecyclestage"]
         company_linkedin = normalize_linkedin_url(props.get("linkedin_url"))
         if company_linkedin:
             hs_props["linkedin_company_page"] = company_linkedin
@@ -127,15 +218,17 @@ class HubSpotClient:
         if domain:
             existing = self._search_company_by_domain(domain)
             if existing:
+                if if_exists == "add_job_note_only":
+                    return existing, False
                 self._request(
                     "PATCH",
                     f"/crm/v3/objects/companies/{existing}",
                     {"properties": hs_props},
                 )
-                return existing
+                return existing, False
 
         created = self._request("POST", "/crm/v3/objects/companies", {"properties": hs_props})
-        return str(created["id"])
+        return str(created["id"]), True
 
     def _search_company_by_domain(self, domain: str) -> str | None:
         body = {
@@ -159,7 +252,13 @@ class HubSpotClient:
             return None
         return str(results[0]["id"])
 
-    def _upsert_contact(self, props: dict[str, Any], company_id: str) -> str | None:
+    def _upsert_contact(
+        self,
+        props: dict[str, Any],
+        company_id: str,
+        *,
+        if_exists: str = "update",
+    ) -> str | None:
         full_name = props.get("name") or ""
         parts = full_name.split(None, 1)
         first = parts[0] if parts else "Unknown"
@@ -178,6 +277,8 @@ class HubSpotClient:
             hs_props["email"] = props["email"]
         if props.get("phone"):
             hs_props["phone"] = props["phone"]
+        if props.get("hs_lead_status"):
+            hs_props["hs_lead_status"] = props["hs_lead_status"]
 
         # Prefer normalized LinkedIn; fall back to firstname+lastname at this company.
         existing = None
@@ -187,6 +288,8 @@ class HubSpotClient:
             existing = self._search_contact_by_name_and_company(first, last, company_id)
 
         if existing:
+            if if_exists == "skip":
+                return existing
             contact_id = existing
             self._request(
                 "PATCH",

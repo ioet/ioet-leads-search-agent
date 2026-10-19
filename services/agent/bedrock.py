@@ -96,6 +96,7 @@ class BedrockClient:
         *,
         max_tokens: int = 4096,
         temperature: float = 0.2,
+        allow_repair: bool = True,
     ) -> Any:
         """Call Bedrock Converse and parse a JSON object/array from the reply."""
         text = self.converse_text(
@@ -104,7 +105,7 @@ class BedrockClient:
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return parse_json_from_text(text)
+        return parse_json_from_text(text, allow_repair=allow_repair)
 
     def converse_text(
         self,
@@ -169,7 +170,7 @@ def extract_text(response_body: dict[str, Any]) -> str:
     return message
 
 
-def parse_json_from_text(text: str) -> Any:
+def parse_json_from_text(text: str, *, allow_repair: bool = True) -> Any:
     """Extract JSON from raw model text (plain JSON, fenced, or truncated)."""
     stripped = text.strip()
     match = _JSON_BLOCK_RE.search(stripped)
@@ -183,13 +184,13 @@ def parse_json_from_text(text: str) -> Any:
                 candidate = candidate[:-3].strip()
         else:
             candidate = stripped
-    parsed = _loads_json_lenient(candidate)
+    parsed = _loads_json_lenient(candidate, allow_repair=allow_repair)
     if parsed is not None:
         return parsed
     raise BedrockResponseError(f"Could not parse JSON from model output: {text[:500]!r}")
 
 
-def _loads_json_lenient(candidate: str) -> Any | None:
+def _loads_json_lenient(candidate: str, *, allow_repair: bool = True) -> Any | None:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
@@ -202,6 +203,8 @@ def _loads_json_lenient(candidate: str) -> Any | None:
         try:
             return json.loads(snippet)
         except json.JSONDecodeError:
+            if not allow_repair:
+                continue
             repaired = _repair_truncated_json(snippet)
             if repaired is not None:
                 logger.warning("Repaired truncated JSON from model output")

@@ -45,13 +45,37 @@ def get_workflow() -> Workflow:
         # campaign-id kept for observability / future note tagging
         wf.declare_str("campaign-id").required()
         catalog_ref = wf.declare_str("catalog-ref").required()
+        icp_ref = wf.declare_str("icp-ref", "")
+        campaign_config = wf.declare_json_obj("campaign-config", {})
+        run_id = wf.declare_str("run-id", "")
 
         lead = wf.declare_json_obj("lead")
 
+        prepared = wf.execute(
+            "prepare-lead",
+            company,
+            timeout_seconds=TASK_TIMEOUT_SECONDS,
+        )
+        lead.assign(prepared)
+        wf.handle_any_failure(prepared, _on_error_notify_and_continue("prepare-lead"))
+
+        job_skills_out = wf.execute(
+            "extract-job-skills",
+            lead,
+            campaign_config,
+            timeout_seconds=TASK_TIMEOUT_SECONDS,
+            retries=TASK_RETRIES,
+            exponential_backoff=_retry_policy(),
+        )
+        lead.assign(job_skills_out)
+        wf.handle_any_failure(job_skills_out, _on_error_notify_and_continue("extract-job-skills"))
+
         find_out = wf.execute(
             "find-decision-makers",
-            company,
+            lead,
             icp_version,
+            icp_ref,
+            campaign_config,
             timeout_seconds=TASK_TIMEOUT_SECONDS,
             retries=TASK_RETRIES,
             exponential_backoff=_retry_policy(),
@@ -71,16 +95,6 @@ def get_workflow() -> Workflow:
             sanitize_out, _on_error_notify_and_continue("sanitize-public-fields")
         )
 
-        job_skills_out = wf.execute(
-            "extract-job-skills",
-            lead,
-            timeout_seconds=TASK_TIMEOUT_SECONDS,
-            retries=TASK_RETRIES,
-            exponential_backoff=_retry_policy(),
-        )
-        lead.assign(job_skills_out)
-        wf.handle_any_failure(job_skills_out, _on_error_notify_and_continue("extract-job-skills"))
-
         match_out = wf.execute(
             "match-ioet-skills",
             lead,
@@ -95,6 +109,7 @@ def get_workflow() -> Workflow:
         email_out = wf.execute(
             "draft-outreach-email",
             lead,
+            campaign_config,
             timeout_seconds=TASK_TIMEOUT_SECONDS,
             retries=TASK_RETRIES,
             exponential_backoff=_retry_policy(),
@@ -106,12 +121,24 @@ def get_workflow() -> Workflow:
             "upsert-hubspot",
             lead,
             dry_run,
+            campaign_config,
+            icp_ref,
             timeout_seconds=TASK_TIMEOUT_SECONDS,
             retries=TASK_RETRIES,
             exponential_backoff=_retry_policy(),
         )
         lead.assign(upsert_out)
         wf.handle_any_failure(upsert_out, _on_error_notify_and_continue("upsert-hubspot"))
+
+        recorded = wf.execute(
+            "record-lead-outcome",
+            run_id,
+            lead,
+            dry_run,
+            timeout_seconds=TASK_TIMEOUT_SECONDS,
+        )
+        lead.assign(recorded)
+        wf.handle_any_failure(recorded, _on_error_notify_and_continue("record-lead-outcome"))
 
         wf.complete(lead)
 

@@ -21,6 +21,10 @@ from littlehorse.model.service_pb2 import DeleteTaskDefRequest
 
 from workflow.workers import TASK_HANDLERS, TASK_NAMES
 from workflow.workflows.enrich_publish import CHILD_WF_NAME, get_workflow as get_child_workflow
+from workflow.workflows.fire_schedule import (
+    FIRE_SCHEDULE_WF_NAME,
+    get_workflow as get_fire_schedule_workflow,
+)
 from workflow.workflows.leads_search import PARENT_WF_NAME, get_workflow as get_parent_workflow
 
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +48,7 @@ def main() -> None:
     config = LHConfig()
     child_wf = get_child_workflow()
     parent_wf = get_parent_workflow()
+    fire_wf = get_fire_schedule_workflow()
 
     for name in TASK_NAMES:
         _put_task_def(TASK_HANDLERS[name], name, config)
@@ -51,10 +56,12 @@ def main() -> None:
     # Child first — parent references it via run_wf().
     create_workflow_spec(child_wf, config)
     create_workflow_spec(parent_wf, config)
+    create_workflow_spec(fire_wf, config)
     logger.info(
-        "Registered WfSpecs: %s + %s (%d TaskDefs)",
+        "Registered WfSpecs: %s + %s + %s (%d TaskDefs)",
         PARENT_WF_NAME,
         CHILD_WF_NAME,
+        FIRE_SCHEDULE_WF_NAME,
         len(TASK_NAMES),
     )
 

@@ -12,12 +12,14 @@ from workflow.workflows.leads_search import PARENT_WF_NAME, get_workflow as get_
 def test_task_handlers_cover_all_names() -> None:
     assert set(TASK_HANDLERS) == set(TASK_NAMES)
     assert "search-companies" in TASK_NAMES
+    assert "filter-hubspot-companies" in TASK_NAMES
     assert "select-top-leads" in TASK_NAMES
     assert "notify" in TASK_NAMES
     assert "notify-failure" in TASK_NAMES
     assert "fetch-ioet-skills-catalog" in TASK_NAMES
     assert "match-ioet-skills" in TASK_NAMES
     assert "draft-outreach-email" in TASK_NAMES
+    assert "record-campaign-run" in TASK_NAMES
 
 
 def test_parent_workflow_compiles() -> None:
@@ -110,7 +112,7 @@ def test_build_campaign_summary_includes_message() -> None:
     ctx = MagicMock()
     ctx.wf_run_id = "wf-456"
     result = asyncio.run(
-        build_campaign_summary_task("demo-001", [{"name": "Acme"}], True, ctx)
+        build_campaign_summary_task("demo-001", [{"name": "Acme"}], True, "", ctx)
     )
     assert isinstance(result, dict)
     notify = assert_model(
@@ -126,6 +128,37 @@ def test_build_campaign_summary_includes_message() -> None:
     assert notify.details["leads_processed"] == 1
     assert notify.details["company_names"] == ["Acme"]
     assert isinstance(notify.details["wf_run_id"], str)
+    assert notify.details["leads_published"] == 0
+
+
+def test_build_campaign_summary_counts_child_outcomes() -> None:
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from workflow.workers import _remember_outcome, build_campaign_summary_task
+
+    ctx = MagicMock()
+    ctx.wf_run_id = "wf-789"
+    _remember_outcome(
+        "run-1",
+        {"company_name": "Weekday", "status": "skipped", "contact_count": 0, "note": None},
+    )
+    _remember_outcome(
+        "run-1",
+        {"company_name": "Acme", "status": "dry_run", "contact_count": 1, "note": None},
+    )
+    result = asyncio.run(
+        build_campaign_summary_task(
+            "demo-001", [{"name": "Weekday"}, {"name": "Acme"}], True, "run-1", ctx
+        )
+    )
+    assert "0 published" in result["message"]
+    assert "1 dry-run" in result["message"]
+    assert "0 failed" in result["message"]
+    assert "1 skipped" in result["message"]
+    assert result["details"]["leads_published"] == 0
+    assert result["details"]["leads_skipped"] == 1
+    assert result["details"]["leads_dry_run"] == 1
 
 
 def test_lh_id_prefers_protobuf_id() -> None:

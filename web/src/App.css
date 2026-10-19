@@ -1,9 +1,13 @@
 .shell {
-  max-width: 960px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 32px 20px 64px;
   display: grid;
   gap: 20px;
+}
+
+.auth-shell {
+  max-width: 440px;
 }
 
 .hero {
@@ -11,6 +15,14 @@
   justify-content: space-between;
   gap: 16px;
   align-items: flex-end;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 
 .hero h1 {
@@ -27,6 +39,34 @@
   font-size: 0.92rem;
 }
 
+.user-meta {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-weight: 600;
+}
+
+.tab.on {
+  color: #1a1408;
+  background: var(--accent);
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -36,7 +76,8 @@
   gap: 12px;
 }
 
-.card h2 {
+.card h2,
+.inline-title {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
@@ -68,7 +109,58 @@
   gap: 12px;
 }
 
-.fields label {
+.fields .wide {
+  grid-column: 1 / -1;
+}
+
+.lbl {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.personas {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.personas li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10131b;
+}
+
+.personas .idx {
+  width: 1.2rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.personas .name {
+  flex: 1;
+  min-width: 0;
+}
+
+button.icon {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  min-width: 28px;
+  line-height: 1.4;
+}
+
+.fields label,
+.card > label {
   display: grid;
   gap: 6px;
   font-size: 0.82rem;
@@ -76,6 +168,9 @@
 }
 
 .fields input,
+.fields select,
+.card > label input,
+.card > label select,
 .editor {
   width: 100%;
   background: #10131b;
@@ -88,9 +183,111 @@
 .editor {
   font-family: var(--mono);
   font-size: 0.8rem;
-  min-height: 320px;
+  min-height: 280px;
   resize: vertical;
   line-height: 1.45;
+}
+
+.editor.short {
+  min-height: 88px;
+  font-family: var(--font);
+}
+
+.editor.readonly {
+  min-height: 200px;
+  overflow: auto;
+  margin: 0;
+}
+
+.campaign-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 16px;
+  align-items: start;
+}
+
+.sticky {
+  position: sticky;
+  top: 16px;
+}
+
+.each-run .stats {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.each-run .stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.each-run dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.each-run dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.each-run dd.over-budget {
+  color: var(--danger);
+}
+
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.seg {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.seg.on {
+  background: var(--accent);
+  color: #1a1408;
+  border-color: var(--accent);
+}
+
+.checks {
+  display: grid;
+  gap: 8px;
+}
+
+.checks label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.checks input {
+  margin-top: 3px;
+}
+
+.mini {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
 }
 
 .row {
@@ -98,6 +295,108 @@
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.row.between {
+  justify-content: space-between;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.stack.tight {
+  gap: 10px;
+}
+
+.tab-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.list li {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.list li.active {
+  border-color: var(--accent);
+}
+
+.list-main {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  padding: 0;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.list-main strong {
+  font-size: 0.95rem;
+}
+
+.list-main span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.list-main .error-line {
+  color: var(--danger);
+}
+
+.chips {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chips legend {
+  width: 100%;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.chip {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.chip.on {
+  background: var(--accent);
+  color: #1a1408;
+  border-color: var(--accent);
 }
 
 button {
@@ -116,9 +415,30 @@ button.secondary {
   border: 1px solid var(--line);
 }
 
+button.danger {
+  color: var(--danger);
+  border-color: #5a2a32;
+}
+
+button.linkish {
+  background: transparent;
+  color: var(--accent-2);
+  border: 0;
+  padding: 4px 0;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.auth-links {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .banner {
@@ -143,7 +463,21 @@ button:disabled {
   color: var(--accent);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 900px) {
+  .campaign-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sticky {
+    position: static;
+  }
+}
+
+@media (max-width: 800px) {
+  .tab-grid {
+    grid-template-columns: 1fr;
+  }
+
   .fields {
     grid-template-columns: 1fr;
   }
@@ -151,5 +485,9 @@ button:disabled {
   .hero {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .user-meta {
+    justify-items: start;
   }
 }

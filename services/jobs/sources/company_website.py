@@ -74,7 +74,8 @@ class CompanyWebsiteJobPostingSource(JobPostingSource):
                 continue
 
             text = _html_to_text(response.text)
-            if len(text) < 200 or _looks_like_code(text):
+            if len(text) < 200 or _looks_like_code(text) or _looks_like_directory(text):
+                logger.info("Skipping careers page that is not a job posting: %s", url)
                 continue
 
             extracted = self._extract_postings(text, company, url, max_results=max_results)
@@ -98,30 +99,21 @@ class CompanyWebsiteJobPostingSource(JobPostingSource):
         for chunk in chunks:
             if _looks_like_code(chunk):
                 continue
-            title = _guess_title(chunk) or f"Open role at {company.name}"
-            if _is_junk_title(title):
+            title = _guess_title(chunk)
+            if not title or _is_junk_title(title):
+                continue
+            if _looks_like_directory(chunk):
                 continue
             postings.append(
                 JobPosting(
                     title=title,
                     source=self.source_id,
-                    description=chunk[:8000],
+                    description=chunk[:4000],
                     url=page_url,
                 )
             )
             if len(postings) >= max_results:
                 break
-        if not postings and len(page_text) >= 200 and not _looks_like_code(page_text):
-            fallback_title = f"Careers — {company.name}"
-            if not _is_junk_title(fallback_title):
-                postings.append(
-                    JobPosting(
-                        title=fallback_title,
-                        source=self.source_id,
-                        description=page_text[:8000],
-                        url=page_url,
-                    )
-                )
         return postings
 
 
@@ -167,8 +159,28 @@ def _split_job_sections(text: str) -> list[str]:
     return sections
 
 
+_ROLE_TITLE_RE = re.compile(
+    r"(?:Senior|Staff|Principal|Lead|Junior|Mid)?\s*"
+    r"(?:Software|Backend|Frontend|Full[- ]Stack|Platform|Data|DevOps|QA|Product|Mobile|Cloud)?\s*"
+    r"(?:Engineer|Developer|Architect|Designer|Manager|Analyst|SRE)",
+    re.IGNORECASE,
+)
+_LOREM_RE = re.compile(r"\b(lorem|ipsum|vivamus|aenean|vestibulum|nascetur)\b", re.IGNORECASE)
+
+
+def _looks_like_directory(text: str) -> bool:
+    """Careers indexes and placeholder marketing pages are not job postings."""
+    if _LOREM_RE.search(text):
+        return True
+    titles = _ROLE_TITLE_RE.findall(text)
+    return len(titles) >= 8
+
+
 def _guess_title(chunk: str) -> str | None:
-    first_line = chunk.split(".", 1)[0].strip()
-    if 8 <= len(first_line) <= 120:
-        return first_line
-    return None
+    match = _ROLE_TITLE_RE.search(chunk[:600])
+    if not match:
+        return None
+    title = _WS_RE.sub(" ", match.group(0)).strip(" -–—")
+    if not 6 <= len(title) <= 80:
+        return None
+    return title

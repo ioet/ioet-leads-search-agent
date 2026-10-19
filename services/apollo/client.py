@@ -56,13 +56,26 @@ class ApolloClient:
         segment: Segment,
         *,
         max_results: int = 25,
+        company_filter: Any | None = None,
     ) -> list[Company]:
         remaining = max_results
         page = 1
         companies: list[Company] = []
         while remaining > 0:
             per_page = min(remaining, 100)
-            payload = segment_to_apollo_org_search(segment, page=page, per_page=per_page)
+            payload = segment_to_apollo_org_search(
+                segment,
+                page=page,
+                per_page=per_page,
+                company_filter=company_filter,
+            )
+            if page == 1:
+                logger.info(
+                    "Apollo company search segment=%s locations=%s employee_ranges=%s",
+                    segment.id,
+                    payload.get("organization_locations"),
+                    payload.get("organization_num_employees_ranges"),
+                )
             data = self._post("/mixed_companies/search", payload)
             orgs = data.get("organizations") or data.get("accounts") or []
             if not orgs:
@@ -104,12 +117,23 @@ class ApolloClient:
             scopes.append({"q_keywords": company.name})
 
         people: list[dict[str, Any]] = []
+        used_scope: dict[str, Any] = {}
         for scope in scopes:
             data = self._post("/mixed_people/api_search", {**base, **scope})
             people = [p for p in data.get("people") or [] if isinstance(p, dict) and _person_name(p)]
+            used_scope = scope
             if people:
                 break
         people = people[:max_results]
+        logger.info(
+            "Apollo people search company=%s org_id=%s domain=%s titles=%s scope=%s raw_people=%d",
+            company.name,
+            company.apollo_organization_id,
+            company.domain,
+            titles,
+            list(used_scope.keys()),
+            len(people),
+        )
 
         if people and enrich_contacts_enabled():
             people = self._enrich_people(people)
@@ -150,6 +174,8 @@ def search_companies(
     segment_ids: list[str],
     max_results: int,
     client: ApolloClient | None = None,
+    *,
+    company_filter: Any | None = None,
 ) -> list[Company]:
     apollo = client or ApolloClient()
     per_segment = max(1, max_results // max(len(segment_ids), 1))
@@ -161,7 +187,11 @@ def search_companies(
         if not segment.in_outbound:
             logger.warning("Skipping non-outbound segment %s", segment_id)
             continue
-        found = apollo.search_companies_for_segment(segment, max_results=per_segment)
+        found = apollo.search_companies_for_segment(
+            segment,
+            max_results=per_segment,
+            company_filter=company_filter,
+        )
         for company in found:
             key = (company.domain or company.name).lower()
             if key in seen_domains:
